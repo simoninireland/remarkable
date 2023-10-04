@@ -1,4 +1,4 @@
-;;; remarkable0cloud.el --- ReMarkable cloud API -*- lexical-binding: t -*-
+;;; remarkable-cloud.el --- ReMarkable cloud API -*- lexical-binding: t -*-
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
@@ -54,6 +54,9 @@
 (defconst remarkable-device "desktop-windows"
   "Device identification for accessing the ReMarkable cloud.")
 
+(defconst remarkable-user-token-lifetime (* 60 60 24)
+  "Presumed lifetime for a ReMarkable cloud user token (one day, in seconds).")
+
 
 ;; Hosts
 ;; (Seem subject to change: these are correct as of Sep2023.)
@@ -67,22 +70,24 @@
 (defconst remarkable-sync-host "https://internal.cloud.remarkable.com"
    "Remarkable cloud synchronisation server.")
 
-(defconst remarkable-service-manager-host "https://service-manager-production-dot-remarkable-production.appspot.com"
-  "Service manager for the ReMarkable cloud.")
+(defconst remarkable-discovery-host "https://service-manager-production-dot-remarkable-production.appspot.com"
+  "Discovery service manager for the ReMarkable cloud.")
 
 
 ;; API endpoints
 
-(defconst remarkable-device-token-url (concat remarkable-auth-host "/token/json/2/device/new")
+;; on the auth server
+(defconst remarkable-device-token-url "/token/json/2/device/new"
   "Endpoint for acquiring a ReMarkable cloud device token.")
-
-(defconst remarkable-user-token-url (concat remarkable-auth-host "/token/json/2/user/new")
+(defconst remarkable-user-token-url "/token/json/2/user/new"
   "Endpoint for acquiring a ReMarkable cloud user token.")
 
-(defconst remarkable-discover-storage-url (concat remarkable-service-manager-host "/service/json/1/document-storage")
+;; on the discovery server
+(defconst remarkable-discover-storage-url "/service/json/1/document-storage?environment=production&apiVer=2"
   "Endpoint to discover the storage host.")
 
-(defconst remarkable-metadata-url (concat remarkable-doc-host "/document-storage/json/2/docs")
+;; on the document server
+(defconst remarkable-metadata-url "/document-storage/json/2/docs"
   "Endpoint for retrieving the metadata for one or all ReMarkable cloud documents.")
 
 
@@ -96,6 +101,9 @@
 
 (defvar remarkable-user-token nil
   "The user token for this client.")
+
+(defvar remarkable-user-token-timestamp nil
+  "The time the user token was acquired.")
 
 
 ;; ---------- Authentication ----------
@@ -113,7 +121,7 @@
 	 (body (list (cons "code" code)
 		     (cons "deviceDesc" remarkable-device)
 		     (cons "deviceID" uuid))))
-    (request remarkable-device-token-url
+    (request (concat remarkable-auth-host remarkable-device-token-url)
       :type "POST"
       :parser #'buffer-string
       :data (json-encode body)
@@ -128,7 +136,7 @@
 
 (defun remarkable--renew-user-token ()
   "Renew the user token using the device token."
-  (request remarkable-user-token-url
+  (request (concat remarkable-auth-host remarkable-user-token-url)
     :type "POST"
     :parser #'buffer-string
     :headers (list (cons "User-Agent" remarkable-user-agent)
@@ -137,7 +145,8 @@
     :success (cl-function (lambda (&key data &allow-other-keys)
 			    (setq remarkable-user-token data)))
     :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			  (error "Error %s" error-thrown)))))
+			  (error "Error %s" error-thrown))))
+  remarkable-user-token)
 
 
 (defun remarkable-authenticate (code)
@@ -172,33 +181,34 @@ code and re-authenticating."
   (and remarkable-device-token remarkable-user-token t))
 
 
-;; ---------- Document and folder access ----------
+;; ---------- Discovery ----------
 
 (defun remarkable--discover-storage-host ()
   "Discover the storage server being used.
 
 This resets the `remarkable-doc-host' to the host returned
 from the service manager endpoint."
-  (request remarkable-discover-storage-url
-      :type "GET"
-      :parser #'json-read
-      :params (list (cons "environment" "production")
-		    (cons "apiVer" 2))
-      :headers (list (cons "User-Agent" remarkable-user-agent)
-		     (cons "Accept" "application/json"))
-      :sync t
-      :success (cl-function (lambda (&key data &allow-other-keys)
-			      (let ((host (concat "https://" (cdr (assoc 'Host data)))))
-				(setq remarkable-doc-host host)
-				(message (format "Document storage host reset to %s" host)))))
-      :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error %s" error-thrown)))))
+  (request (concat remarkable-discovery-host remarkable-discover-storage-url)
+    :type "GET"
+    :parser #'json-read
+    :headers (list (cons "User-Agent" remarkable-user-agent)
+		   (cons "Accept" "application/json"))
+    :sync t
+    :success (cl-function (lambda (&key data &allow-other-keys)
+			    (let ((host (concat "https://" (cdr (assoc 'Host data)))))
+			      (setq remarkable-doc-host host)
+			      (message (format "Document storage host reset to %s" host)))))
+    :error (cl-function (lambda (&key error-thrown &allow-other-keys)
+			  (error "Error %s" error-thrown))))
+  remarkable-doc-host)
 
+
+;; ---------- Document and folder access ----------
 
 (defun remarkable--get-metadata ()
   "Return a list of folders and documents."
   (let (documents)
-    (request remarkable-metadata-url
+    (request (concat remarkable-doc-host remarkable-metadata-url)
       :type "GET"
       :parser #'json-read
       :headers (list (cons "User-Agent" remarkable-user-agent)
@@ -217,7 +227,7 @@ from the service manager endpoint."
 (defun remarkable--get-document (doc)
   "Return the document identified by DOC."
   (let (document)
-    (request remarkable-metadata-url
+    (request (concat remarkable-doc-host remarkable-metadata-url)
       :type "GET"
       :parser #'buffer-string
       :params (list (cons "doc" doc)

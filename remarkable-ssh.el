@@ -27,12 +27,16 @@
 ;;; Commentary:
 
 ;; An API based on having ssh access to the ReMarkable tablet.
-;; This works both over wifi and over a local USB network.
+;; This should work both over wifi and over a local USB network.
+;;
+;; The API builds a metadata alist for all the documents on the
+;; tablet. Optionally it can also build a document tree reflecting
+;; the folder structure.
 
 ;;; Code:
 
+(require 'f)
 (require 'dash)
-(require 'org)
 (require 'json)
 
 

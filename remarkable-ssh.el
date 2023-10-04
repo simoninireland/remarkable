@@ -197,21 +197,6 @@ has been deleted."
   (equal (remarkable--document-parent uuid meta) "trash"))
 
 
-;; ---------- Access buffer ----------
-
-(defun remarkable--make-buffer (meta)
-  "Create a buffer containing details of all the documents in META."
-  (let ((buf (generate-new-buffer "*ReMarkable documents*")))
-    (with-current-buffer buf
-      (dolist (uuid (remarkable--uuids meta :folders nil))
-	(insert (remarkable--document-name uuid meta))
-	(insert (format " (%s)" (remarkable--document-format uuid meta)))
-	(newline)))
-    (display-buffer buf)))
-
-
-
-
 
 (provide 'remarkable-ssh)
 ;; remarkable-ssh.el ends here

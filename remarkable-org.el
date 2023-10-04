@@ -26,7 +26,7 @@
 
 ;;; Commentary:
 
-;; Interface between org mode and the ReMarkable
+;; Interface between org mode and the ReMarkable.
 
 ;;; Code:
 
@@ -46,9 +46,6 @@
 	(insert (format " (%s)" (remarkable--document-format uuid meta)))
 	(newline)))
     (display-buffer buf)))
-
-
-
 
 
 (provide 'remarkable-org)

@@ -27,11 +27,12 @@
 ;;; Commentary:
 
 ;; remarkable provides a link between Emacs (and specifically org and org-roam)
-;; and the ReMarkable tabley (https://remarkable.com).
+;; and the ReMarkable tablet (https://remarkable.com).
 
 ;;; Code:
 
-(require remarkable-cloud)
+(require remarkable-ssh)
+(require remarkable-org)
 
 
 (provide 'remarkable)

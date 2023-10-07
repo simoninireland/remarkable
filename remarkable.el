@@ -31,7 +31,15 @@
 
 ;;; Code:
 
-(require remarkable-ssh)
+;; JSON Web Token parsing
+(require 'jwt)
+
+;; Cloud API
+(require 'remarkable-cloud-auth)
+(require 'remarkable-cloud-sync15)
+;;(require remarkable-ssh)
+
+;; org integration
 (require remarkable-org)
 
 

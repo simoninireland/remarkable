@@ -43,13 +43,13 @@
 ;; ---------- Parameters ----------
 
 (defconst remarkable-doc-store-path "~/.local/share/remarkable/xochitl"
-  "Path from the home directory to the document store.")
+  "Path from the ReMarkable home directory to the document store.")
 
 (defconst remarkable-user "root"
-  "Tablet username.")
+  "ReMarkable tablet username.")
 
 (defvar remarkable-host "remarkable"
-  "The hostname or IP address for the tablet.")
+  "The hostname or IP address for the ReMarkable tablet.")
 
 
 ;; ---------- Helper functions ----------
@@ -199,7 +199,6 @@ has been deleted."
 (defun remarkable--is-deleted? (uuid meta)
   "True if document UUID in META has been deleted."
   (equal (remarkable--document-parent uuid meta) "trash"))
-
 
 
 (provide 'remarkable-ssh)

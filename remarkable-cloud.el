@@ -33,12 +33,17 @@
 ;;   - https://github.com/juruen/rmapi/
 ;;   - https://github.com/subutux/rmapy
 ;;   - https://github.com/splitbrain/ReMarkableAPI/
+;;
+;; One-time device registration code can be obtained from:
+;;
+;;   - https://my.remarkable.com/device/desktop/connect
 
 ;;; Code:
 
 (require 'org)
 (require 'request)
 (require 'json)
+(require 'jwt)
 
 
 ;; ---------- Web interface ----------
@@ -86,8 +91,8 @@
 (defconst remarkable-discover-storage-url "/service/json/1/document-storage?environment=production&apiVer=2"
   "Endpoint to discover the storage host.")
 
-;; on the document server
-(defconst remarkable-metadata-url "/document-storage/json/2/docs"
+;; on the sync server
+(defconst remarkable-metadata-url "/sync/v2/signed-urls/downloads"
   "Endpoint for retrieving the metadata for one or all ReMarkable cloud documents.")
 
 
@@ -102,8 +107,11 @@
 (defvar remarkable-user-token nil
   "The user token for this client.")
 
-(defvar remarkable-user-token-timestamp nil
-  "The time the user token was acquired.")
+(defvar remarkable-user-id nil
+  "The user id for this client..")
+
+(defvar remarkable-sync-version nil
+  "The synchronisation protocol version to be used.")
 
 
 ;; ---------- Authentication ----------
@@ -134,6 +142,30 @@
 			    (error "Error %s" error-thrown))))))
 
 
+(defun remarkable--parse-user-token (jwt)
+  "Parse the user token JWT to extract some information we need.
+
+Specifically, we extract the version of the synchronisation protocol
+the cloud expects, and the user id of the token owner."
+  (let* ((es (jwt-decode jwt))
+	 (claims (cadr es)))
+
+    ;; user id
+    (let* ((auth (cdr (assoc 'auth0-profile claims)))
+	   (uid (cdr (assoc 'UserID auth))))
+      (setq remarkable-user-id uid))
+
+    ;; sync version
+    (let ((scopes (s-split (rx " ") (cdr (assoc 'scopes claims)))))
+      (if (or (member "sync:fox" scopes)
+	      (member "sync:tortoise" scopes)
+	      (member "sync:hare" scopes))
+	  (setq remarkable-sync-version 1.5)
+
+	;; we only support version 1.5 at the moment
+	(error "Unsupported synchronisation protocol requested")))))
+
+
 (defun remarkable--renew-user-token ()
   "Renew the user token using the device token."
   (request (concat remarkable-auth-host remarkable-user-token-url)
@@ -143,7 +175,8 @@
 		   (cons "Authorization" (concat "Bearer " remarkable-device-token)))
     :sync t
     :success (cl-function (lambda (&key data &allow-other-keys)
-			    (setq remarkable-user-token data)))
+			    (setq remarkable-user-token data)
+			    (remarkable--parse-user-token data)))
     :error (cl-function (lambda (&key error-thrown &allow-other-keys)
 			  (error "Error %s" error-thrown))))
   remarkable-user-token)
@@ -207,12 +240,16 @@ from the service manager endpoint."
 
 (defun remarkable--get-metadata ()
   "Return a list of folders and documents."
-  (let (documents)
-    (request (concat remarkable-doc-host remarkable-metadata-url)
-      :type "GET"
+  (let ((body (list (cons "http_method" "GET")
+		    (cons "relative_path" "root")))
+	documents)
+    (request (concat remarkable-sync-host remarkable-metadata-url)
+      :type "POT"
       :parser #'json-read
+      :data (json-encode body)
       :headers (list (cons "User-Agent" remarkable-user-agent)
 		     (cons "Authorization" (concat "Bearer " remarkable-user-token))
+		     (cons "Content-Type" "application/json")
 		     (cons "Accept" "application/json"))
       :sync t
       :success (cl-function (lambda (&key data &allow-other-keys)
@@ -228,12 +265,11 @@ from the service manager endpoint."
   "Return the document identified by DOC."
   (let (document)
     (request (concat remarkable-doc-host remarkable-metadata-url)
-      :type "GET"
+      :type "POST"
       :parser #'buffer-string
-      :params (list (cons "doc" doc)
-		    (cons "withBlob" "true"))
       :headers (list (cons "User-Agent" remarkable-user-agent)
 		     (cons "Authorization" (concat "Bearer " remarkable-user-token))
+		     (cons "Content-Type" "application/json")
 		     (cons "Accept" "application/json"))
       :sync t
       :success (cl-function (lambda (&key data &allow-other-keys)

@@ -26,7 +26,7 @@
 
 ;;; Commentary:
 
-;; The suthentication API.
+;; The authentication API.
 ;;
 ;; Based heavily on the interfaces provided by:
 ;;
@@ -62,7 +62,7 @@
   "Endpoint for acquiring a ReMarkable cloud user token.")
 
 
-;; ---------- Configuration----------
+;; ---------- Configuration ----------
 
 (defvar remarkable-uuid nil
   "UUID for this client.")
@@ -73,8 +73,8 @@
 (defvar remarkable-user-token nil
   "The user token for this client.")
 
-(defvar remarkable-user-id nil
-  "The user id for this client..")
+(defvar remarkable-user-token-expires nil
+  "The expiry time for the user token.")
 
 (defvar remarkable-sync-version nil
   "The synchronisation protocol version to be used.")
@@ -115,6 +115,31 @@ code and re-authenticating."
   (and remarkable-device-token remarkable-user-token t))
 
 
+(defun remarkable-token ()
+  "Return the user token needed to authenticate.
+
+If the user token has not been acquired, or has expired, a new one
+is obtained."
+  (if (or (null remarkable-user-token)
+	  (remarkable--user-token-expired))
+      (remarkable--renew-user-token))
+  remarkable-user-token)
+
+
+;; ---------- Helper functions ----------
+
+(defun remarkable--user-token-expired ()
+  "True if the user token has expired."
+  (time-less-p remarkable-user-token-expires (current-time)))
+
+
+(defun remarkable--uuid ()
+  "Return a new UUID for a document or folder.
+
+We re-use `org-id-uuid' for UUID generation."
+  (org-id-uuid))
+
+
 ;; ---------- API interactions ----------
 
 (defun remarkable--uuid ()
@@ -123,10 +148,16 @@ code and re-authenticating."
       (let ((uuid (org-id-uuid)))
 	(setq remarkable-uuid uuid))))
 
-
+g
 (defun remarkable--register-device (code)
-  "Register this application as a device using the one-time CODE."
-  (let* ((uuid (remarkable--uuid))
+  "Register this application as a device using the one-time CODE.
+
+The one-time code is submitted to the registration API endpoint
+(`remarkable-device-token-url' on `remarkable-auth-host'), along
+with a device UUID and a device description (held in `remarkable-device').
+This returns a device registration token that persistenly identifies
+the connection from this device to the ReMarkable cloud."
+  (let* ((uuid (remarkable-uuid))
 	 (body (list (cons "code" code)
 		     (cons "deviceDesc" remarkable-device)
 		     (cons "deviceID" uuid))))
@@ -144,17 +175,16 @@ code and re-authenticating."
 
 
 (defun remarkable--parse-user-token (jwt)
-  "Parse the user token JWT to extract some information we need.
+  "Parse the JWT user token to extract some API information we need.
 
 Specifically, we extract the version of the synchronisation protocol
-the cloud expects, and the user id of the token owner."
+the cloud expects, and the expiry time of the token."
   (let* ((es (jwt-decode jwt))
 	 (claims (cadr es)))
 
-    ;; user id
-    (let* ((auth (cdr (assoc 'auth0-profile claims)))
-	   (uid (cdr (assoc 'UserID auth))))
-      (setq remarkable-user-id uid))
+    ;; expiry
+    (let ((exp (cdr (assoc 'exp claims))))
+      (setq reamrkable-user-token-expires exp))
 
     ;; sync version
     (let ((scopes (s-split (rx " ") (cdr (assoc 'scopes claims)))))
@@ -168,7 +198,15 @@ the cloud expects, and the user id of the token owner."
 
 
 (defun remarkable--renew-user-token ()
-  "Renew the user token using the device token."
+  "Renew the user token using the device token.
+
+This submits a \"POST\" request against the user token endpoint
+(`remarkable-user-token-url' on `remarkable-auth-host'), passing
+the device token asa bearer authorisation token. This returns
+a JWT user token which is then used as thebearer token for the
+rest of the API. The user token is automatically parsed by
+calling `remarkable--parse-user-token' to extract some information
+about the API to be used."
   (request (concat remarkable-auth-host remarkable-user-token-url)
     :type "POST"
     :parser #'buffer-string

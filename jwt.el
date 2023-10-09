@@ -36,34 +36,7 @@
 (require 'json)
 
 
-;; ---------- Constants ----------
-
-(defconst jwt--hmac256-key "AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"
-  "HMAC256 key used to validate JWT tokens.")
-
-
-;; ---------- Parsing and verification ----------
-
-(defun jwt--split (jwt)
-  "Split the JWT string into a list.
-
-The list consists of the JOSE header, the claims, and the signature,"
-  (s-split (rx ".") jwt))
-
-
-(defun jwt--base64-decode-string (s)
-  "Decode a Base64-encoded string that has has trailing '=' characters deleted.
-
-JWT allows padding characters to be deleted. They need to be added
-back before decoding using `base64-decode-string'. The padding
-pads-out the string so its length is divisible by 4.
-
-See https://en.wikipedia.org/wiki/Base64 for details of Base64."
-  (let* ((lm4 (mod (length s) 4))
-	 (p (- 4 lm4))
-	 (padded (concat s (make-string p ?=))))
-    (base64-decode-string padded)))
-
+;; ---------- Public API ----------
 
 (defun jwt-decode (jwt)
   "Decode the JWT token, returning a list.
@@ -82,6 +55,29 @@ The signature currently isn't checked."
 				    :object-type 'alist))
 	 (sig (caddr js)))
     (list jose claims sig)))
+
+
+;; ---------- Parsing and verification ----------
+
+(defun jwt--split (jwt)
+  "Split the JWT string into a list.
+
+The list consists of the JOSE header, the claims, and the signature,"
+  (s-split (rx ".") jwt))
+
+
+(defun jwt--base64-decode-string (s)
+  "Decode a Base64-encoded string that has had trailing '=' characters deleted.
+
+JWT allows padding characters to be deleted. They need to be added
+back before decoding using `base64-decode-string'. The padding
+pads-out the string so its length is divisible by 4.
+
+See https://en.wikipedia.org/wiki/Base64 for details of Base64."
+  (let* ((lm4 (mod (length s) 4))
+	 (p (- 4 lm4))
+	 (padded (concat s (make-string p ?=))))
+    (base64-decode-string padded)))
 
 
 (provide 'jwt)

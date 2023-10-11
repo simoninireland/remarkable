@@ -110,6 +110,17 @@ FN may name a document or a folder.")
 Returns the new folder structure.")
 
 
+;; ---------- Helper functions ----------
+
+(defun remarkable--timestamp (ts)
+  "onvert a ReMarkable timestamp to a Lisp timestamp.
+
+The ReMarkable timestamp is measured in mulliseconds since the
+epoch. We covert this to the usual Lisp list format for timestamps."
+  (let ((s (/ (string-to-number ts) 1000)))
+    (decode-time s )))
+
+
 ;; ---------- Doanload API interactions ----------
 
 (cl-defun remarkable--get-blob-url (&optional uuid)
@@ -165,17 +176,13 @@ folder and a generation hash, which are returned as a list."
     (cons index gen)))
 
 
-(defun remarkable--get-index (hash)
-  "Return the index of the folder identified by HASH.
+(defun remarkable--get-blob (hash)
+  "Get the blob associated with the given HASH.
 
-The hash should have been acquired by `remarkable--get-hash-generation'
-called on the appropriate blob URL. To get the index, the API is
-interrogated to get a blob URL by calling `remarkable--get-blob-url'
-for the hash. This URL is then dereferenced with a \"GET\" request,
-which returns the index of the folder. This is passed to
-`remarkable--parse-index' to create a folder structure for the folder."
+This uses `remarkable--get-blob-url' to retreieve the download
+URL, and dereferences this to get the blob itself."
   (let ((url (remarkable--get-blob-url hash))
-	raw-index)
+	blob)
     (request url
       :type "GET"
       :parser #'buffer-string
@@ -183,13 +190,24 @@ which returns the index of the folder. This is passed to
 		     (cons "Authorization" (concat "Bearer " (remarkable-token))))
       :sync t
       :success (cl-function (lambda (&key data &allow-other-keys)
-			      (setq raw-index data)))
+			      (setq blob data)))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
 			    (error "Error %s" error-thrown))))
-    (let ((lines (s-lines raw-index)))
+    blob))
 
+
+(defun remarkable--get-index (hash)
+  "Return the index of the folder identified by HASH.
+
+The hash should have been acquired by `remarkable--get-hash-generation'
+called on the appropriate blob URL. To get the index, we first acquire
+the blob by calling `remarkable--get-blob', which returns the index of
+the folder. This is passed to `remarkable--parse-index' to create a
+folder structure."
+  (let ((raw-index (remarkable--get-blob hash)))
+    (let ((lines (s-lines raw-index)))
       ;; check that the index has the correct schema,
-      ;; given as the first line
+      ;; which is given by the first line
       (if (not (equal (string-to-number (car lines)) 3))
 	  (error "Wrong schema version: %s" (car lines)))
 
@@ -208,32 +226,71 @@ with elements:
    - ':hash' the hash identifying the file
    - ':type' the file type: \"DocumentTyoe\" for documents or
      \"CollectionType\" for folders
-   - ':uuid' the UUID of the elelent
+   - ':filename' the filename of the element, based on a
+     UUID possibly with an extension
    - ':subfiles' the number of sub-files, and
    - ':length' the length of the element
 
 Other elements may be added by other functions that process the list."
   (cl-flet ((parse-entry (entry)
 	      (let ((fields (s-split ":" entry)))
-		(cond ((equal (length fields) 5)                   ;; hash
+		(cond ((equal (length fields) 5)
 		       (list :hash (nth 0 fields)
 			     ;; rename types to match the metadata fields
-			     (let ((type (nth 1 fields)))
-			       (pcase type
-				 ("80000000"
-				  "DocumentType")
-				 ("0"
-				  "CollectionType")
-				 (_
-				  (error "Unknown type %s" type))))
-			     (nth 2 fields)                        ;; UUID
-			     (string-to-number (nth 3 fields))     ;; sub-files
-			     (string-to-number (nth 4 fields))))   ;; length
+			     :type (let ((type (nth 1 fields)))
+				     (pcase type
+				       ("80000000"
+					"DocumentType")
+				       ("0"
+					"CollectionType")
+				       (_
+					(error "Unknown type %s" type))))
+			     :filename (nth 2 fields)
+			     :subfiles (string-to-number (nth 3 fields))
+			     :length (string-to-number (nth 4 fields))))
 		      ((equal entry "")
 		       nil)
 		      (t
 		       (error "Wrong number of fields in index entry: %s" (length fields)))))))
     (mapcar #'parse-entry index)))
+
+
+(defun remarkable--add-metadata (ls)
+  "Add document-level metadata to the folder structure LS.
+
+Each entry in LS is queried for metadata using `remarkable--get-metadata'.
+If found, the metadata is added as a plist associated with
+the ':metadata' tag."
+  (cl-mapc (lambda (e)
+	     (if-let* ((hash (plist-get e :hash))
+		       (metadata (remarkable--get-metadata hash)))
+		 (plist-put e :metadata metadata)))
+	   ls))
+
+
+(defun remarkable--get-metadata (hash)
+  "Get the metadata associated with the document HASH.
+
+We first acquire the index associated with HASH, which for a document
+will include a \".metadata\" file. Downloading this file retrieves
+the metadata for the blob."
+  (cl-flet ((metadata-hash (index)
+	      "Return the hash of the metadata blob from INDEX, or nil"
+	      (let ((meta (-filter (lambda (e)
+				     (let ((fn (plist-get e :filename)))
+				       (and (not (null fn))
+					    (equal (f-ext fn) "metadata"))))
+				   index)))
+		(if (not (null meta))
+		    (plist-get (car meta) :hash)))))
+    (if-let* ((index (remarkable--get-index hash))
+	      (metahash (metadata-hash index))
+	      (raw-metadata (remarkable--get-blob metahash))
+	      (metadata (json-parse-string raw-metadata
+					   :object-type 'plist)))
+	;; patch the timestamp into a standard format
+	(plist-put metadata :lastModified
+		   (remarkable--timestamp (plist-get metadata :lastModified))))))
 
 
 ;; ---------- Document archives ----------

@@ -1,4 +1,4 @@
-;;; jwt.el --- JON Web Token functions -*- lexical-binding: t -*-
+;;; jwt.el --- JSON Web Token functions -*- lexical-binding: t -*-
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
@@ -39,20 +39,20 @@
 ;; ---------- Public API ----------
 
 (defun jwt-decode (jwt)
-  "Decode the JWT token, returning a list.
+  "Decode the JWT, returning a list.
 
 The list consists of:
 
-   - A list representation of the JOSE header
-   - A list representation of the JWT claims
+   - A plist representation of the JOSE header
+   - A plist representation of the JWT claims
    - A signature block
 
-The signature currently isn't checked."
+The signature uses a server-side key and so isn't checked."
   (let* ((js (jwt--split jwt))
 	 (jose (json-parse-string (jwt--base64-decode-string (car js))
-				  :object-type 'alist))
+				  :object-type 'plist))
 	 (claims (json-parse-string (jwt--base64-decode-string (cadr js))
-				    :object-type 'alist))
+				    :object-type 'plist))
 	 (sig (caddr js)))
     (list jose claims sig)))
 
@@ -67,7 +67,7 @@ The list consists of the JOSE header, the claims, and the signature,"
 
 
 (defun jwt--base64-decode-string (s)
-  "Decode a Base64-encoded string that has had trailing '=' characters deleted.
+  "Decode a Base64-encoded string that has had any trailing '=' characters deleted.
 
 JWT allows padding characters to be deleted. They need to be added
 back before decoding using `base64-decode-string'. The padding

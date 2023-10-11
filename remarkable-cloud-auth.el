@@ -61,6 +61,17 @@
 (defconst remarkable-user-token-url "/token/json/2/user/new"
   "Endpoint for acquiring a ReMarkable cloud user token.")
 
+;; Constants needed in various places
+
+(defconst remarkable-user-agent "remarkable-emacs"
+  "User agent passed to the ReMarkable cloud.")
+
+(defconst remarkable-device "desktop-linux"
+  "Device description used when registering a new device.
+
+This has to be taken from the limited set that the API recognises,
+but apparently has no significance.")
+
 
 ;; ---------- Configuration ----------
 
@@ -97,7 +108,7 @@ The one-time CODE should be obtained from
     (unless (and remarkable-device-token remarkable-user-token)
       (setq remarkable-device-token nil
 	    remarkable-user-token nil)
-      (nessage "Failed to authenticate"))))
+      (message "Failed to authenticate"))))
 
 
 (defun remarkable-deauthenticate ()
@@ -148,19 +159,22 @@ We re-use `org-id-uuid' for UUID generation."
       (let ((uuid (org-id-uuid)))
 	(setq remarkable-uuid uuid))))
 
-g
+
 (defun remarkable--register-device (code)
   "Register this application as a device using the one-time CODE.
 
 The one-time code is submitted to the registration API endpoint
 (`remarkable-device-token-url' on `remarkable-auth-host'), along
 with a device UUID and a device description (held in `remarkable-device').
-This returns a device registration token that persistenly identifies
+This returns a device registration token that persistently identifies
 the connection from this device to the ReMarkable cloud."
-  (let* ((uuid (remarkable-uuid))
-	 (body (list (cons "code" code)
+  ;; create a UUID for this device
+  (setq remarkable-uuid (remarkable--uuid))
+
+  ;; request a device token using the one-time code
+  (let* ((body (list (cons "code" code)
 		     (cons "deviceDesc" remarkable-device)
-		     (cons "deviceID" uuid))))
+		     (cons "deviceID" remarkable-uuid))))
     (request (concat remarkable-auth-host remarkable-device-token-url)
       :type "POST"
       :parser #'buffer-string
@@ -183,11 +197,11 @@ the cloud expects, and the expiry time of the token."
 	 (claims (cadr es)))
 
     ;; expiry
-    (let ((exp (cdr (assoc 'exp claims))))
-      (setq reamrkable-user-token-expires exp))
+    (let ((exp (plist-get claims :exp)))
+      (setq remarkable-user-token-expires exp))
 
     ;; sync version
-    (let ((scopes (s-split (rx " ") (cdr (assoc 'scopes claims)))))
+    (let ((scopes (s-split (rx " ") (plist-get claims :scopes))))
       (if (or (member "sync:fox" scopes)
 	      (member "sync:tortoise" scopes)
 	      (member "sync:hare" scopes))

@@ -224,8 +224,8 @@ by colons. The elements are split-out and sanitised slightly into a plist
 with elements:
 
    - ':hash' the hash identifying the file
-   - ':type' the file type: \"DocumentTyoe\" for documents or
-     \"CollectionType\" for folders
+   - ':type' the (index-level) file type, /not/ the object-level
+     one
    - ':filename' the filename of the element, based on a
      UUID possibly with an extension
    - ':subfiles' the number of sub-files, and
@@ -236,15 +236,7 @@ Other elements may be added by other functions that process the list."
 	      (let ((fields (s-split ":" entry)))
 		(cond ((equal (length fields) 5)
 		       (list :hash (nth 0 fields)
-			     ;; rename types to match the metadata fields
-			     :type (let ((type (nth 1 fields)))
-				     (pcase type
-				       ("80000000"
-					"DocumentType")
-				       ("0"
-					"CollectionType")
-				       (_
-					(error "Unknown type %s" type))))
+			     :type (nth 1 fields)
 			     :filename (nth 2 fields)
 			     :subfiles (string-to-number (nth 3 fields))
 			     :length (string-to-number (nth 4 fields))))
@@ -254,6 +246,8 @@ Other elements may be added by other functions that process the list."
 		       (error "Wrong number of fields in index entry: %s" (length fields)))))))
     (mapcar #'parse-entry index)))
 
+
+;; ---------- Object-level metadata management ----------
 
 (defun remarkable--add-metadata (ls)
   "Add document-level metadata to the folder structure LS.
@@ -291,6 +285,162 @@ the metadata for the blob."
 	;; patch the timestamp into a standard format
 	(plist-put metadata :lastModified
 		   (remarkable--timestamp (plist-get metadata :lastModified))))))
+
+
+(defun remarkable--make-folder-hierarchy (es)
+  "Construct a entry hierarchy for the list of entries ES.
+
+This takes a entry list constructed from a flat index of the root
+collection and converts it into a nested entry structure. Each collection
+and sub-collection has a \":contents\" property that contains the documents
+and collections within it."
+  (cl-labels ((copy-entry (e)
+		"Create a copy of E."
+		(append e nil))
+
+	      (find-collection (uuid es)
+		"Find the folder with the given UUID in ES."
+		(remarkable--find-entry uuid es))
+
+	      (add-entry-to-contents (e f)
+		"Add E to the contents of F, creating the entry if necessary."
+		(let ((cs (plist-get f :contents)))
+		  (if cs
+		      ;; existing contents, add to the list
+		      (plist-put f :contents (append cs (list e)))
+
+		    ;; no current contents, create a singleton
+		    (plist-put f :contents (list e)))))
+
+	      (fold-entries (notdone done deferred)
+		"Fold entries from NOTDONE and DEFERRED into DONE to create hierarchy."
+		(if (null notdone)
+		    (if deferred
+			;; we have deferred entries
+			(fold-entries deferred done nil)
+		      ;; no deferred entries, complete
+		      done)
+
+		  (let ((e (copy-entry (car notdone)))
+			(rest (cdr notdone)))
+		    (if (remarkable--is-deleted? e)
+			;; deleted entry, elide
+			(progn
+			  (princ (format "deleted %s\n" (remarkable--entry-name e)))
+			  (fold-entries rest done deferred))
+		      (if (remarkable--object-is-in-root-collection? e)
+			  ;; entry is in root collection, move to done
+			  (progn
+			    (princ "root\n")
+			    (fold-entries rest (append done (list e)) deferred))
+
+			(let ((parent (remarkable--object-parent e)))
+			  ;; look for parent in done
+			  (if-let ((p (find-collection parent done)))
+			      ;; parent is in done, move to there and continue
+			      (progn
+				(add-entry-to-contents e p)
+				(fold-entries rest done deferred))
+
+			    ;; parent not yet processed, defer
+			    (fold-entries rest done (append deferred (list e)))))))))))
+
+    (fold-entries es nil nil)))
+
+
+(defun remarkable--find-entry (uuid es)
+  "Find the entry with the given UUID in (possibly nested) structure ES."
+  (cl-block FIND
+    (cl-labels ((check-entry (e)
+		  "Check if E has the given UUID."
+		  (if (equal (remarkable--entry-uuid e) uuid)
+		      (cl-return-from FIND e)
+		    (check-contents e)))
+		(check-contents (e)
+		  "Check the contents of E."
+		  (mapc #'check-entry
+			(remarkable--entry-contents e))))
+      (mapc #'check-entry es)
+
+      ;; if we get here, we failed to find the entry
+      nil)))
+
+
+(defun remarkable--prettyprint-hierarchy (es)
+  "Pretty-print the hierarchy ES."
+  (cl-labels ((make-indent (n)
+		(make-string n ?\s))
+	      (pp (e indent)
+		(let ((print-e (concat (make-indent indent) (remarkable--entry-name e)))
+		      (print-es (mapcar (lambda (e) (pp e (+ indent 3))) (remarkable--entry-contents e))))
+		  (apply #'concat (format "%s\n" print-e) print-es))))
+    (cl-prettyprint (mapconcat (lambda (e) (pp e 0)) es))))
+
+
+;; Field access for common information
+
+(defun remarkable--entry-metadata (e)
+  "Return the object-level metedata associated with E."
+  (plist-get e :metadata))
+
+(defun remarkable--entry-metadata-get (e k)
+  "Return the metadata field K associated with E."
+  (plist-get (remarkable--entry-metadata) k))
+
+(defun remarkable--entry-uuid (e)
+  "Return the UUID associated with E."
+  (plist-get e :filename))
+
+(defun remarkable--entry-hash (e)
+  "Return the hash associated with E."
+  (plist-get e :hash))
+
+(defun remarkable--entry-changed? (e1 e2)
+  "Check whether E1 and E2 have the same hash."
+  (equal (remarkable--entry-hash e1)
+	 (remarkable--entry-hash e2)))
+
+(defun remarkable--entry-parent (e)
+  "Return the hash of the parent of E.
+
+A parent of \"\" indicates the E is in the root folder. A parent
+of \"trash\" indicates a deleted file (see `remarkable--is-deleted?'."
+  (remarkable--entry-metadata-get e :parent))
+
+(defun remarkable--entry-is-in-root-collection? (e)
+  "Test whether E is in the root collection.
+
+E may represent a document or a collection. It is in the root collection
+if its parent is \"\"."
+  (let ((p (remarkable--entry-parent e)))
+    (or (null p)
+	(equal p ""))))
+
+(defun remarkable--entry-name (e)
+  "Return the visible name associated with E."
+  (remarkable--entry-metadata-get e :visibleName))
+
+(defun remarkable--entry-is-collection? (e)
+  "Check whether E is a collection (folder)."
+   (equal (remarkable--entry-metadata-get e :type) "CollectionType"))
+
+(defun remarkable--entry-is-document? (e)
+  "Check whether E is a document."
+    (equal (remarkable--entry-metadata-get e :type) "DocumentType"))
+
+(defun remarkable--entry-is-deleted? (e)
+  "Check whether E has been deleted."
+  (equal (remarkable--entry-metadata-get e :parent) "trash"))
+
+(defun remarkable--entry-is-not-deleted? (e)
+  "Check whether E has not been deleted.
+
+This is simply the negation of `remarkable--is-deleted?'."
+  (not (remarkable--entry-is-deleted? e)))
+
+(defun remarkable--entry-contents (e)
+  "Return the list of sub-entries of E."
+  (plist-get e :contents))
 
 
 ;; ---------- Document archives ----------

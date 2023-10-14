@@ -294,6 +294,22 @@ This takes a entry list constructed from a flat index of the root
 collection and converts it into a nested entry structure. Each collection
 and sub-collection has a \":contents\" property that contains the documents
 and collections within it."
+
+  ;; The problem with this operation is that the hierarchy is only encoded
+  ;; into object-level metadata, and the entries in an index are not
+  ;; guaranteed to come out in an order that respects it, so we don't
+  ;; know whether the parent of an entry will have been processed when
+  ;; we encounter the child entry.
+  ;;
+  ;; The solution -- not elegant! -- is to defer the processing of
+  ;; objects whose parent we can't find in the already-processed list,
+  ;; and re-traverse these deferred entries once we've processed the
+  ;; entire index. We possibly need to do this several times in really
+  ;; obstructive cases, and an error in the hierarchy construction process
+  ;; at the server-side would give rise to an infinite recursion
+  ;; (which we should probably guard against, although it doesn't seem
+  ;; to be an issue in practice so far).
+
   (cl-labels ((copy-entry (e)
 		"Create a copy of E."
 		(append e nil))
@@ -325,9 +341,7 @@ and collections within it."
 			(rest (cdr notdone)))
 		    (if (remarkable--is-deleted? e)
 			;; deleted entry, elide
-			(progn
-			  (princ (format "deleted %s\n" (remarkable--entry-name e)))
-			  (fold-entries rest done deferred))
+			(fold-entries rest done deferred)
 		      (if (remarkable--object-is-in-root-collection? e)
 			  ;; entry is in root collection, move to done
 			  (progn

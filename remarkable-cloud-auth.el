@@ -236,4 +236,4 @@ about the API to be used."
 
 
 (provide 'remarkable-cloud-auth)
-;; remarkable-cloud-auth.el ends here
+;;; remarkable-cloud-auth.el ends here

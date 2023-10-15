@@ -54,7 +54,7 @@ epoch."
 
 (defun remarkable--temporary-directory ()
   "Return the name of the temporary directory to use for files."
-  (expand-file-name "~/programming/remarkable/tmp"))
+  tamporary-file-directory)
 
 
 (defun remarkable--create-temporary-directory-name (dir)

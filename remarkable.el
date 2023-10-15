@@ -34,6 +34,9 @@
 ;; JSON Web Token parsing
 (require 'jwt)
 
+;; Utility functions
+(require 'remarkable-utils)
+
 ;; Cloud API
 (require 'remarkable-cloud-auth)
 (require 'remarkable-cloud-sync15)
@@ -44,4 +47,4 @@
 
 
 (provide 'remarkable)
-;; remarkable.el ends here
+;;; remarkable.el ends here

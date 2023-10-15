@@ -61,7 +61,7 @@
 (defconst remarkable--generation-header "x-goog-generation"
   "Generation header.")
 
-(defconst remarkable--cotent-length-range-header "x-goog-content-length-range"
+(defconst remarkable--content-length-range-header "x-goog-content-length-range"
   "Content length range header.")
 
 (defconst remarkable--generation-match-header "x-goog-if-generation-match"
@@ -83,7 +83,8 @@ If UUID is omitted, return the structure for the root folder."
   (let* ((folder (remarkable--get-blob-url uuid))
 	 (hash-gen (remarkable--get-hash-generation folder))
 	 (index (remarkable--get-index (car hash-gen))))
-    index))
+    (remarkable--add-metadata index)
+    (remarkable--make-collection-hierarchy index)))
 
 
 (defun remarkable-get (fn ls)
@@ -116,12 +117,90 @@ Returns the new folder structure.")
   "onvert a ReMarkable timestamp to a Lisp timestamp.
 
 The ReMarkable timestamp is measured in mulliseconds since the
-epoch. We covert this to the usual Lisp list format for timestamps."
+epoch. We convert this to the usual Lisp list format for timestamps."
   (let ((s (/ (string-to-number ts) 1000)))
     (decode-time s )))
 
 
-;; ---------- Doanload API interactions ----------
+(defun remarkable--lisp-timestamp (ts)
+  "Convert the Lisp time value TS to ReMarkable timestamp format.
+
+The ReMarkable timestamp is measured in mulliseconds since the
+epoch."
+  (car (time-convert ts 1000)))
+
+
+(defun remarkable--temporary-directory ()
+  "Return the name of the temporary directory to use for files."
+  (expand-file-name "~/programming/remarkable/tmp"))
+
+
+(defun remarkable--create-temporary-directory-name (dir)
+  "Create a the name of a temporary directory DIR into which to build a document archive.
+
+Returns the full path to the directory."
+  (f-join (remarkable--temporary-directory) dir))
+
+
+(defconst remarkable--sha256-shell-command "shasum -a 256 -"
+  "Shell command used to generate SHA256 hashes.
+
+This should be a filter taking the data to hash on its standard input
+and returning the hash on standard output. The actual hash will be
+extracted from this output using the regexp given in
+`remarkable--sha256-regexp'.")
+
+(defconst remarkable--sha256-regexp (rx (group (one-or-more (any hex-digit))))
+  "Regexp used to extract a SHA256 hash from the output of `remarkable--sha256-shell-command'.")
+
+
+(defun remarkable--sha256-file (fn)
+  "Return the SHA256 hash of FN.
+
+This relies on an external program defined in
+`remarkable--sha256-shell-command'. The hash is a nunber, but is
+returned as a string."
+  (with-temp-buffer
+    (call-process-shell-command remarkable--sha256-shell-command
+				fn
+				(current-buffer))
+    (goto-char (point-min))
+    (if (re-search-forward remarkable--sha256-regexp nil t)
+	(match-string 1)
+      (error "Failed to generate SHA256 hash for %s" fn))))
+
+
+(defun remarkable--sha256-files (fns)
+  "Return the sum of the hashes of the given files."
+  (let* ((hs (mapcar (lambda (fn)
+		       (let ((h (remarkable--sha256-file fn)))
+			 (string-to-number h 16)))
+		     fns)))
+    (apply #'+ hs)))
+
+
+(defun remarkable--create-temporary-data-file-name ()
+  "Create a name based for computing SHA256 hashes of data."
+  (let ((stem (format "tmp%s" (random 10000))))
+    (f-swap-ext (f-join (remarkable--temporary-directory) stem) "dat")))
+
+
+(defun remarkable--sha256-data (data)
+  "Return the SHA256 hash of the given DATA.
+
+This uses `remarkable--sha256-file' on a temporary file containing
+the data."
+  (let ((tmp (remarkable--create-temporary-data-file-name)))
+    (unwind-protect
+	(progn
+	  (with-temp-file tmp
+	    (insert data))
+	  (remarkable--sha256-file tmp))
+      (if (f-exists tmp)
+	  (f-delete tmp)))))
+
+
+;; ---------- Download API interactions ----------
 
 (cl-defun remarkable--get-blob-url (&optional uuid)
   "Get the access URL to a document or folder identified by UUID.
@@ -151,14 +230,14 @@ a \"GET\" request in its payload.)"
       :success (cl-function (lambda (&key data &allow-other-keys)
 			      (setq url (cdr (assoc 'url data)))))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error %s" error-thrown))))
+			    (error "Error getting blob URL: %s" error-thrown))))
     url))
 
 
 (defun remarkable--get-hash-generation (url)
   "Retrieve the hash and generation from URL.
 
-The URL should be a blob URL for a folder. This is derefereced with
+The URL should be a blob URL for a folder. This is dereferenced with
 a \"GET\" request and returns a hash for the index document of the
 folder and a generation hash, which are returned as a list."
   (let (index gen)
@@ -172,7 +251,7 @@ folder and a generation hash, which are returned as a list."
 			      (setq gen (request-response-header response remarkable--generation-header))
 			      (setq index data)))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error %s" error-thrown))))
+			    (error "Error getting document hash and generation: %s" error-thrown))))
     (cons index gen)))
 
 
@@ -192,7 +271,7 @@ URL, and dereferences this to get the blob itself."
       :success (cl-function (lambda (&key data &allow-other-keys)
 			      (setq blob data)))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error %s" error-thrown))))
+			    (error "Error getting blob: %s" error-thrown))))
     blob))
 
 
@@ -204,23 +283,17 @@ called on the appropriate blob URL. To get the index, we first acquire
 the blob by calling `remarkable--get-blob', which returns the index of
 the folder. This is passed to `remarkable--parse-index' to create a
 folder structure."
-  (let ((raw-index (remarkable--get-blob hash)))
-    (let ((lines (s-lines raw-index)))
-      ;; check that the index has the correct schema,
-      ;; which is given by the first line
-      (if (not (equal (string-to-number (car lines)) 3))
-	  (error "Wrong schema version: %s" (car lines)))
-
-      ;; return the parsed index, generated from the rest
-      ;; of the lines
-      (remarkable--parse-index (cdr lines)))))
+  (let* ((raw-index (remarkable--get-blob hash))
+	 (lines (s-lines raw-index)))
+    (remarkable--parse-index lines)))
 
 
-(defun remarkable--parse-index (index)
-  "Parse the lines in INDEX as the index of a collection.
+(defun remarkable--parse-index (lines)
+  "Parse the LINES as the index of a collection.
 
-INDEX shuld be a list of strings consisting of five fields separated
-by colons. The elements are split-out and sanitised slightly into a plist
+LINES should have the scheme version as the first line, followed by
+a list of strings consisting of five fields separated by colons.
+The elements are split-out and sanitised slightly into a plist
 with elements:
 
    - ':hash' the hash identifying the file
@@ -231,7 +304,12 @@ with elements:
    - ':subfiles' the number of sub-files, and
    - ':length' the length of the element
 
-Other elements may be added by other functions that process the list."
+Other elements may be added tho entries by other functions.
+In particular, `remarkable--get-metada' adds object-level metadata
+to the entry, and `remarkable--make-collection-hierarchy' forms
+the collection-document hierarchy.
+
+This function is the dual of `remarkable--create-index'."
   (cl-flet ((parse-entry (entry)
 	      (let ((fields (s-split ":" entry)))
 		(cond ((equal (length fields) 5)
@@ -244,7 +322,13 @@ Other elements may be added by other functions that process the list."
 		       nil)
 		      (t
 		       (error "Wrong number of fields in index entry: %s" (length fields)))))))
-    (mapcar #'parse-entry index)))
+    ;; check that the index has the correct schema,
+    ;; which is given by the first line
+    (if (not (equal (string-to-number (car lines)) remarkable-index-schema-version))
+	(error "Wrong schema version: %s" (car lines)))
+
+    ;; generate entries for the rest of the lines
+    (mapcar #'parse-entry (cdr lines))))
 
 
 ;; ---------- Object-level metadata management ----------
@@ -287,7 +371,7 @@ the metadata for the blob."
 		   (remarkable--timestamp (plist-get metadata :lastModified))))))
 
 
-(defun remarkable--make-folder-hierarchy (es)
+(defun remarkable--make-collection-hierarchy (es)
   "Construct a entry hierarchy for the list of entries ES.
 
 This takes a entry list constructed from a flat index of the root
@@ -344,9 +428,7 @@ and collections within it."
 			(fold-entries rest done deferred)
 		      (if (remarkable--object-is-in-root-collection? e)
 			  ;; entry is in root collection, move to done
-			  (progn
-			    (princ "root\n")
-			    (fold-entries rest (append done (list e)) deferred))
+			  (fold-entries rest (append done (list e)) deferred)
 
 			(let ((parent (remarkable--object-parent e)))
 			  ;; look for parent in done
@@ -385,13 +467,15 @@ and collections within it."
   (cl-labels ((make-indent (n)
 		(make-string n ?\s))
 	      (pp (e indent)
-		(let ((print-e (concat (make-indent indent) (remarkable--entry-name e)))
+		(let ((print-e (concat (make-indent indent)
+				       (remarkable--entry-name e)
+				       (format " (%s)" (remarkable--entry-uuid e))))
 		      (print-es (mapcar (lambda (e) (pp e (+ indent 3))) (remarkable--entry-contents e))))
 		  (apply #'concat (format "%s\n" print-e) print-es))))
     (cl-prettyprint (mapconcat (lambda (e) (pp e 0)) es))))
 
 
-;; Field access for common information
+;; Field access for common information from entries
 
 (defun remarkable--entry-metadata (e)
   "Return the object-level metedata associated with E."
@@ -459,24 +543,185 @@ This is simply the negation of `remarkable--is-deleted?'."
 
 ;; ---------- Document archives ----------
 
-(defun remarkable--temporary-directory-name ()
-  "Create a name for a temporary directory..
-
-Returns the full path to the directory."
-  (let ((dir (concat "doc" (number-to-string (random 10000)))))
-    (f-join (temporary-file-directory) dir)))
+(defun remarkable--create-temporary-zip-file-name (stem)
+  "Create a name based on STEM for a temporary file for the upload archive."
+  (f-swap-ext (f-join (remarkable--temporary-directory) stem) "zip"))
 
 
-(defun remarkable--create-temporary-directory ()
-  "Create a temporary diretory into which to build a document archive.
+(defconst remarkable--zip-shell-command "zip -r %s *"
+  "This should be a script that zips all the files in the current directory.
+It takes one argument represented by a %s placeholder holding the
+zipfile to create.")
 
-Returns the full path to the directory."
-  (let ((dir (remoarkable--temporary-directory-name)))
-    (f-mkdir-full-path dir)
-    dir))
+(defun remarkable--create-zip-file (fn dir)
+  "Create a zip archive called FN from the files in DIR.
+
+This relies on the use of an external program defined in
+`remarkable--zip-shell-command'. The files will be added from
+DIR, meaning their names will simply be the filename with no
+extra directory stem."
+  (let ((default-directory dir))
+    (process-file-shell-command (format remarkable--zip-shell-command fn))))
+
+
+(defun remarkable--filename-to-name (fn)
+  "Convert a filename FN into something hopefully more readable.
+
+This relies on the name being meaningful in some sense. We
+strip the extension and replace underscores with spaces.
+(Should probably capitalise as well.)"
+  (let* ((stem (file-name-sans-extension fn))
+	 (spaced (string-replace "_" " " stem)))
+    spaced))
+
+
+(defun remarkable--create-metadata-plist (fn parent)
+  "Create a metadata plist for FN going into PARENT."
+  (list :visibleName (remarkable--filename-to-name fn)
+	:type "DocumentType"
+	:parent parent
+	:synced t
+	:lastModified (remarkable--lisp-timestamp (current-time))))
+
+
+(defun remarkable--create-content-plist (ext)
+  "Create the content description for a document of type EXT."
+  (list :dummyDocument: :false
+	:fileType: ext
+	:pageCount: 0
+	:lastOpenedPage: 0
+	:lineHeight: -1
+	:margins: 180
+	:orientation "portrait"
+	:textScale: 1
+	:transform (list :m11 1
+			 :m12 0
+			 :m13 0
+			 :m21 0
+			 :m22 1
+			 :m23 0
+			 :m31 0
+			 :m32 0
+			 :m33 1)
+	:pages nil
+	:pageTage: nil
+	:extraMetatata: (list :lastPen: "Finelinerv2"
+			      :lastTool: "Finelinerv2"
+			      :lastFinelinerv2Size: 1)))
+
+
+(defun remarkable--create-json-file (json-fn plist)
+  "Write PLIST value JSON to JSON-FN."
+  (let ((json (json-encode plist)))
+    (with-temp-file json-fn
+      (insert json)
+      (json-pretty-print (point-min) (point-max)))))
+
+
+(defun remarkable--create-index (fns)
+  "Create an index for the files in FNS.
+
+This the dual of `remarkable--parse-index'."
+  (cl-flet ((insert-index-line (fn)
+	      "Insert an index line for file FN."
+	      (let ((hash (remarkable--sha256-file fn))
+		    (length (f-length fn)))
+		(insert (format "%s:80000000:%s:0:%s\n" hash length)))))
+
+    (with-temp-buffer
+      (insert (format "%s\n" remarkable-index-schema-version))
+      (mapc #'insert-index-line fns)
+      (buffer-string))))
 
 
 ;; ---------- Upload API interactions ----------
+
+(defun remarkable--get-blob-upload-url (hash)
+  "Get the upload URL and maximum upload size for a document with the given HASH.
+
+This function sends a \"POST\" method to the download endpoint
+(`remarkable-upload-url' on `remarkable-sync-host') passing a
+JSON payload specifying the \"PUT\" an item identified by a
+hash.
+
+(Note that this is a \"POST\" request to the API that includes
+a \"PUT\" request in its payload.)"
+  (let ((body (list (cons "http_method" "PUT")
+		    (cons "relative_path" hash)))
+	url maxUpload)
+    (request (concat remarkable-sync-host remarkable-upload-url)
+      :type "POST"
+      :parser #'json-read
+      :data (json-encode body)
+      :headers (list (cons "User-Agent" remarkable-user-agent)
+		     (cons "Authorization" (concat "Bearer " (remarkable-token)))
+		     (cons "Content-Type" "application/json"))
+      :sync t
+      :success (cl-function (lambda (&key data &allow-other-keys)
+			      (setq url (cdr (assoc 'url data)))
+			      (setq maxUpload (cdr (assoc 'maxuploadsize_bytes data)))))
+      :error (cl-function (lambda (&key error-thrown &allow-other-keys)
+			    (error "Error in getting blob upload URL: %s" error-thrown))))
+    (list url maxUpload)))
+
+
+(defun remarkable--put-data-blob (data hash)
+   "Upload a blob of DATA.
+
+This works by hashing DATA and acquiring an upload URL for that hash
+using `remarkable--get-blob-upload-url', and then making a \"PUT\"
+request against this URL to upload DATA."
+   (let ((hash (remarkable--sha256-data data))
+	 (url-max (remarkable--get-blob-upload-url hash))
+	 (url (car url-max))
+	 (maxUpload (cadr url-max)))
+     (request url
+       :type "PUT"
+       ;; :files (list (cons "upload" fn))
+       :data (with-temp-buffer
+	       (insert-file-contents fn)
+	       (buffer-string))
+       :parser #'buffer-string
+       :headers (list (cons "User-Agent" remarkable-user-agent)
+		      (cons remarkable--content-length-range-header (format "0,%s" maxUpload))
+		      (cons "Authorization" (concat "Bearer " (remarkable-token))))
+       :sync t
+       :success (cl-function (lambda (&key data &allow-other-keys)
+			       (message "Uploaded data (%s bytes)" (length data))))
+       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
+			     (error "Error in uploading data: %s" error-thrown))))
+     t))
+
+
+(defun remarkable--put-blob (fn)
+  "Upload the file FN.
+
+This uses `remarkable--put-blob-data' to send the file."
+  (let ((data (with-temp-buffer
+		(insert-file-contents fn)
+		(buffer-string))))
+    (remarkable--put-blob-data data)))
+
+
+(defun remarkable--upload-complete (gen)
+  "Indicate to the ReMarkable cloud that the upload of GEN is finished.
+
+This performs a \"POST\" request against the completion endpoint
+(`remarkable-sync-complete-url' on `remarkable-sync-host')."
+  (let ((body (list (cons "generation" gen))))
+    (request (concat remarkable-sync-host remarkable-sync-complete-url)
+      :type "POST"
+      :parser #'json-read
+      :data (json-encode body)
+      :headers (list (cons "User-Agent" remarkable-user-agent)
+		     (cons "Authorization" (concat "Bearer " (remarkable-token)))
+		     (cons "Content-Type" "application/json"))
+      :sync t
+      :success (cl-function (lambda (&key data &allow-other-keys)
+			      t))
+      :error (cl-function (lambda (&key error-thrown &allow-other-keys)
+			    (error "Error finishing upload: %s" error-thrown))))))
+
 
 (defun remarkable--file-type-supported? (fn)
   "Check that the file type of FN is supported.
@@ -486,15 +731,49 @@ Supported file type extension are given in `remarkable-file-types'."
     (member ext remarkable-file-types)))
 
 
-(defun remarkable--upload-document (fn uuid)
-  "Upload document FN with given UUID."
-  (let ((uuid (remarkable--uuid)))
+(cl-defun remarkable--upload-document (fn &optional (parent "root"))
+  "Upload document FN to given PARENT.
 
+If PARENT is omitted the document goes to the root collection."
+  (let* ((uuid (remarkable--uuid))
+	 (tmp (remarkable--create-temporary-directory-name uuid))
+	 (zip-fn (remarkable--create-temporary-zip-file-name uuid))
+	 (metadata-fn (f-swap-ext (f-join tmp uuid) "metadata"))
+	 (metadata (remarkable--create-metadata-plist fn parent))
+	 (content-fn (f-swap-ext (f-join tmp uuid) "content"))
+	 (content (remarkable--create-content-plist "pdf")))
+    (unwind-protect
+	(progn
+	  ;; create the temporary directory
+	  (f-mkdir-full-path tmp)
 
+	  ;; create the metadata files of different kinds
+	  (remarkable--create-json-file metadata-fn metadata)
+	  (remarkable--create-json-file content-fn content)
 
-    )
-  )
+	  ;; upload the component files
+	  (mapc #'remarkable--put-blob (list metadata-fn
+					     content-fn
+					     fn))
 
+	  ;; compute the overall hash
+	  (let ((hash (remarkable--sha256-files (list metadata-fn
+						      content-fn
+						      fn)))
+		(index (remarkable--create-index (list metadata-fn
+						       content-fn
+						       fn))))
+	    (remarkable--put-blob hash index))
+
+	  ;; finish the upload
+	  (remarkable--upload-complete gen))
+
+      ;; clean-up temporary storage
+      (progn
+	(if (f-exists? zip-fn)
+	    (f-delete zip-fn))
+	(if (f-exists? tmp)
+	    (f-delete tmp t))))))
 
 
 (provide 'remarkable-cloud-sync15)

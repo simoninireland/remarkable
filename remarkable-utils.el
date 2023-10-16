@@ -54,7 +54,7 @@ epoch."
 
 (defun remarkable--temporary-directory ()
   "Return the name of the temporary directory to use for files."
-  tamporary-file-directory)
+  (temporary-file-directory))
 
 
 (defun remarkable--create-temporary-directory-name (dir)
@@ -62,6 +62,13 @@ epoch."
 
 Returns the full path to the directory."
   (f-join (remarkable--temporary-directory) dir))
+
+
+;; ---------- Missing file operations ----------
+
+(defun f-length (fn)
+  "Return the length of a file FN in bytes."
+  (file-attribute-size (file-attributes fn)))
 
 
 ;; ---------- SHA256 hashing of files and data ----------
@@ -79,7 +86,7 @@ extracted from this output using the regexp given in
   "Return the SHA256 hash of FN.
 
 This relies on an external program defined in
-`remarkable--sha256-shell-command'. The hash is a nunber, but is
+`remarkable--sha256-shell-command'. The hash is a number, but is
 returned as a string."
   (with-temp-buffer
     (call-process-shell-command remarkable--sha256-shell-command
@@ -91,13 +98,24 @@ returned as a string."
       (error "Failed to generate SHA256 hash for %s" fn))))
 
 
+(defun remarkable--sha256-sum (hs)
+  "Return the sum of hashes HS.
+
+The hash is a number but returned as a string."
+  (number-to-string (apply #'+ hs)))
+
+
 (defun remarkable--sha256-files (fns)
-  "Return the sum of the hashes of the given files."
+  "Return the sum of the hashes of the given files.
+
+This simply computes the file hashes and then calls
+`remarkable--sha256-sum'. The hash is a number but is
+returned as a string."
   (let* ((hs (mapcar (lambda (fn)
 		       (let ((h (remarkable--sha256-file fn)))
 			 (string-to-number h 16)))
 		     fns)))
-    (apply #'+ hs)))
+    (remarkable--sha256-sum hs)))
 
 
 (defun remarkable--create-temporary-data-file-name ()
@@ -113,11 +131,11 @@ This uses `remarkable--sha256-file' on a temporary file containing
 the data."
   (let ((tmp (remarkable--create-temporary-data-file-name)))
     (unwind-protect
-	(progn
+	(let ((coding-system-for-write 'no-conversion))
 	  (with-temp-file tmp
 	    (insert data))
 	  (remarkable--sha256-file tmp))
-      (if (f-exists tmp)
+      (if (f-exists? tmp)
 	  (f-delete tmp)))))
 
 

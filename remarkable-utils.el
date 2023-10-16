@@ -73,6 +73,9 @@ Returns the full path to the directory."
 
 ;; ---------- SHA256 hashing of files and data ----------
 
+;; sd: Should we code this up in Lisp to avoid the external dependency?
+;; Has to be done on content, though, and might be too slow for large files.
+
 (defconst remarkable--sha256-shell-command "shasum -a 256 -"
   "Shell command used to generate SHA256 hashes.
 
@@ -102,7 +105,7 @@ returned as a string."
   "Return the sum of hashes HS.
 
 The hash is a number but returned as a string."
-  (number-to-string (apply #'+ hs)))
+  (number-to-string (apply #'+ (mapcar #'string-to-number hs))))
 
 
 (defun remarkable--sha256-files (fns)

@@ -135,15 +135,12 @@ Returns the new folder structure.")
     (setq remarkable--root-hierarchy (remarkable--make-collection-hierarchy index))))
 
 
-(defun remarkable--hash-root-index ()
+(defun remarkable--root-index-hash ()
   "Return the hash of the root index.
 
 This is simply the sum of the individual objects' hashes."
-  (cl-flet ((entry-hash (e)
-	      "Return the hash of the entry E."
-	      (plist-get e :hash)))
-    (let ((hs (mapcar #'entry-hash remarkable--root-index)))
-      (remarkable--sha256-sum hs))))
+  (let ((hs (mapcar #'remarkable--entry-hash remarkable--root-index)))
+    (remarkable--sha256-sum hs)))
 
 
 (defun remarkable--create-root-index ()
@@ -172,13 +169,12 @@ hashes and sub-files."
 ;; ---------- Index handling ----------
 
 (defun remarkable--get-index (hash)
-  "Return the index of the folder identified by HASH.
+  "Return the index of the object identified by HASH.
 
-The hash should have been acquired by `remarkable--get-hash-generation'
-called on the appropriate blob URL. To get the index, we first acquire
-the blob by calling `remarkable--get-blob', which returns the index of
-the folder. This is passed to `remarkable--parse-index' to create a
-folder structure."
+To get the index, we first acquire the blob by calling
+`remarkable--get-blob', which returns the index of the folder.
+This is passed to `remarkable--parse-index' to create a folder
+structure."
   (let* ((raw-index (remarkable--get-blob hash))
 	 (lines (s-lines raw-index)))
     (remarkable--parse-index lines)))
@@ -187,26 +183,27 @@ folder structure."
 (defun remarkable--parse-index (lines)
   "Parse the LINES as the index of a collection.
 
-LINES should have the scheme version as the first line, followed by
-a list of strings consisting of five fields separated by colons.
-The elements are split-out and sanitised slightly into a plist
-with elements:
+LINES should have the schema version as the first line, followed
+by a list of strings consisting of five fields separated by
+colons. The elements are split-out and sanitised slightly into a
+plist with elements:
 
    - ':hash' the hash identifying the file
    - ':type' the (index-level) file type, /not/ the object-level
      one
    - ':filename' the filename of the element, based on a
-     UUID possibly with an extension
+     UUID, possibly with an extension
    - ':subfiles' the number of sub-files, and
    - ':length' the length of the element
 
-Other elements may be added tho entries by other functions.
-In particular, `remarkable--get-metada' adds object-level metadata
+Other elements may be added to entries by other functions. In
+particular, `remarkable--get-metada' adds object-level metadata
 to the entry, and `remarkable--make-collection-hierarchy' forms
 the collection-document hierarchy.
 
 This function is the dual of `remarkable--create-index'."
   (cl-flet ((parse-entry (entry)
+	      "Split-up and clean-up ENTRY."
 	      (let ((fields (s-split ":" entry)))
 		(cond ((equal (length fields) 5)
 		       (list :hash (nth 0 fields)
@@ -218,13 +215,15 @@ This function is the dual of `remarkable--create-index'."
 		       nil)
 		      (t
 		       (error "Wrong number of fields in index entry: %s" (length fields)))))))
+
     ;; check that the index has the correct schema,
     ;; which is given by the first line
     (if (not (equal (string-to-number (car lines)) remarkable-index-schema-version))
 	(error "Wrong schema version: %s" (car lines)))
 
     ;; generate entries for the rest of the lines
-    (mapcar #'parse-entry (cdr lines))))
+    (-filter (lambda (e) (> (length e) 0))
+	     (mapcar #'parse-entry (cdr lines)))))
 
 
 (defun remarkable--create-index (fns)
@@ -374,12 +373,13 @@ and collections within it."
   ;; we encounter the child entry.
   ;;
   ;; The solution -- not elegant! -- is to defer the processing of
-  ;; objects whose parent we can't find in the already-processed list,
+  ;; objects whose parents we can't find in the already-processed list,
   ;; and re-traverse these deferred entries once we've processed the
   ;; entire index. We possibly need to do this several times in really
   ;; obstructive cases, and an error in the hierarchy construction process
-  ;; would give rise to an infinite recursion (which we should probably
-  ;; guard against, since the whole thing is done client-side).
+  ;; would give rise to an infinite recursion. This structure is built
+  ;; and maintained client-side, so we check the the number of deferred
+  ;; entries goes down with every sweep through the index to detect problems.
 
   (cl-labels ((copy-entry (e)
 		"Create a copy of E."
@@ -404,32 +404,43 @@ and collections within it."
 		(if (null notdone)
 		    (if deferred
 			;; we have deferred entries, check we've reduced them
+			;; from last time (if there was one)
+			;;
+			;; ndeferred counts the number of deferred entries that
+			;; we had when we recursed /on the deferred entries/, not
+			;; at every recursive call: we only change ndeferred when
+			;; we start a sweep the deferred list, and check that this
+			;; number goes down at each such recursion
 			(if (equal (length deferred) ndeferred)
 			    ;; the number of deferred entries is the same as we started with
-			    (error "Problem with the hierarchy")
+			    (error "Problem with the entry hierarchy")
 
-			  ;; otherwise carry on processing
+			  ;; otherwise carry on processing, passing in the
+			  ;; number of the deferred items for later checking
 			  (fold-entries deferred done nil (length deferred)))
 
-		      ;; no deferred entries, complete
+		      ;; no deferred entries, we're done
 		      done)
 
+		  ;; process the next entry
 		  (let ((e (copy-entry (car notdone)))
 			(rest (cdr notdone)))
 		    (if (remarkable--is-deleted? e)
 			;; deleted entry, elide
-			(fold-entries rest done deferred)
+			(fold-entries rest done deferred ndeferred)
+
 		      (if (remarkable--object-is-in-root-collection? e)
 			  ;; entry is in root collection, move to done
 			  (fold-entries rest (append done (list e)) deferred ndeferred)
 
+			;; entry is in a collection, search for it
 			(let ((parent (remarkable--object-parent e)))
 			  ;; look for parent in done
 			  (if-let ((p (find-collection parent done)))
 			      ;; parent is in done, move to there and continue
 			      (progn
 				(add-entry-to-contents e p)
-				(fold-entries rest done deferred) ndeferred)
+				(fold-entries rest done deferred ndeferred))
 
 			    ;; parent not yet processed, defer
 			    (fold-entries rest done (append deferred (list e)) ndeferred)))))))))
@@ -502,15 +513,16 @@ and collections within it."
 (defun remarkable--entry-parent (e)
   "Return the hash of the parent of E.
 
-A parent of \"\" indicates the E is in the root folder. A parent
-of \"trash\" indicates a deleted file (see `remarkable--is-deleted?'."
+A parent of \"\" indicates the E is in the root collection. A
+parent of \"trash\" indicates a deleted file (see
+`remarkable--is-deleted?'."
   (remarkable--entry-metadata-get e :parent))
 
 (defun remarkable--entry-is-in-root-collection? (e)
   "Test whether E is in the root collection.
 
-E may represent a document or a collection. It is in the root collection
-if its parent is \"\"."
+E may represent a document or a collection. It is in the root
+collection if its parent is \"\"."
   (let ((p (remarkable--entry-parent e)))
     (or (null p)
 	(equal p ""))))
@@ -534,7 +546,7 @@ if its parent is \"\"."
 (defun remarkable--entry-is-not-deleted? (e)
   "Check whether E has not been deleted.
 
-This is simply the negation of `remarkable--is-deleted?'."
+This is simply the negation of `remarkable--entry-is-deleted?'."
   (not (remarkable--entry-is-deleted? e)))
 
 (defun remarkable--entry-contents (e)

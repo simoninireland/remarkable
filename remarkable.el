@@ -34,6 +34,9 @@
 ;; JSON Web Token parsing
 (require 'jwt)
 
+;; Customisation options
+(require 'remarkable-custom)
+
 ;; Utility functions
 (require 'remarkable-utils)
 

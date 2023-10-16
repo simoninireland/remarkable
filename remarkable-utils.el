@@ -74,9 +74,6 @@ and returning the hash on standard output. The actual hash will be
 extracted from this output using the regexp given in
 `remarkable--sha256-regexp'.")
 
-(defconst remarkable--sha256-regexp (rx (group (one-or-more (any hex-digit))))
-  "Regexp used to extract a SHA256 hash from the output of `remarkable--sha256-shell-command'.")
-
 
 (defun remarkable--sha256-file (fn)
   "Return the SHA256 hash of FN.

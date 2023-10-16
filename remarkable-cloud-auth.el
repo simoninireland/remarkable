@@ -61,35 +61,6 @@
 (defconst remarkable-user-token-url "/token/json/2/user/new"
   "Endpoint for acquiring a ReMarkable cloud user token.")
 
-;; Constants needed in various places
-
-(defconst remarkable-user-agent "remarkable-emacs"
-  "User agent passed to the ReMarkable cloud.")
-
-(defconst remarkable-device "desktop-linux"
-  "Device description used when registering a new device.
-
-This has to be taken from the limited set that the API recognises,
-but apparently has no significance.")
-
-
-;; ---------- Configuration ----------
-
-(defvar remarkable-uuid nil
-  "UUID for this client.")
-
-(defvar remarkable-device-token nil
-  "The device registration token for this client.")
-
-(defvar remarkable-user-token nil
-  "The user token for this client.")
-
-(defvar remarkable-user-token-expires nil
-  "The expiry time for the user token.")
-
-(defvar remarkable-sync-version nil
-  "The synchronisation protocol version to be used.")
-
 
 ;; ---------- Public API ----------
 

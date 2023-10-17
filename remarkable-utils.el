@@ -23,6 +23,11 @@
 
 ;;; Code:
 
+(require 'f)
+(require 'json)
+(require 'org-id)
+
+
 ;; ---------- Timestamps ----------
 
 (defun remarkable--timestamp (ts)
@@ -70,6 +75,17 @@ Returns the full path to the directory."
 (defun f-length (fn)
   "Return the length of a file FN in bytes."
   (file-attribute-size (file-attributes fn)))
+
+
+(defun remarkable--create-json-file (json-fn plist)
+  "Write PLIST value to JSON-FN.
+
+The file is pretty-printed when saved, to make it easier to
+read (and debug)."
+  (let ((json (json-encode plist)))
+    (with-temp-file json-fn
+      (insert json)
+      (json-pretty-print (point-min) (point-max)))))
 
 
 ;; ---------- SHA256 hashing of files and data ----------

@@ -2,13 +2,6 @@
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
-;; Author: Simon Dobson <simoninireland@gmail.com>
-;; Maintainer: Simon Dobson <simoninireland@gmail.com>
-;; Version: 0.1.1
-;; Keywords: hypermedia, multimedia
-;; Homepage: https://github.com/simoninireland/remarkable
-;; Package-Requires: ((emacs "27.2") (org "8.0") (org-roam)
-
 ;; This file is NOT part of GNU Emacs.
 ;;
 ;; GNU Emacs is free software: you can redistribute it and/or modify
@@ -66,11 +59,6 @@
 
 (defconst remarkable--generation-match-header "x-goog-if-generation-match"
   "Generation match header.")
-
-;; Accepted file types
-
-(defconst remarkable-file-types (list "pdf" "epub" "rm")
-  "List of acceptable file type extensions.")
 
 
 ;; ---------- State variables and cache ----------
@@ -161,8 +149,8 @@ hashes and sub-files."
 		      (mapc #'insert-index-line contents))))))
 
     (with-temp-buffer
-      (insert (format "%s\n" remarkable-index-schema-version))
-      (mapc #'insert-index-line remarkable--root-hierarchy)
+      (insert (format "%s\n" remarkable-index-schema-version))   ;; schema version
+      (mapc #'insert-index-line remarkable--root-hierarchy)      ;; entries
       (buffer-string))))
 
 
@@ -229,12 +217,22 @@ This function is the dual of `remarkable--create-index'."
 (defun remarkable--create-index (fns)
   "Create an index for the files in FNS.
 
-This the dual of `remarkable--parse-index'."
-  (cl-flet ((insert-index-line (fn)
-	      "Insert an index line for file FN."
-	      (let ((hash (remarkable--sha256-file fn))
-		    (length (f-length fn)))
-		(insert (format "%s:80000000:%s:0:%s\n" hash fn length)))))
+Each element of FNS should be either a filename or a cons cell
+consisting of a filename and the filename to be used in the
+index. This allows us to avoid copying large content files.
+
+This function is essentially the dual of `remarkable--parse-index'."
+  (cl-flet ((insert-index-line (fn-or-rename)
+	      "Insert an index line for file FN-OR-RENAME."
+	      (let* ((realname (if (listp fn-or-rename)
+				   (car fn-or-rename)
+				 fn-or-rename))
+		     (indexname (f-filename (if (listp fn-or-rename)
+						(cdr fn-or-rename)
+					      fn-or-rename)))
+		     (hash (remarkable--sha256-file realname))
+		     (length (f-length realname)))
+		(insert (format "%s:80000000:%s:0:%s\n" hash indexname length)))))
 
     (with-temp-buffer
       (insert (format "%s\n" remarkable-index-schema-version))
@@ -389,16 +387,6 @@ and collections within it."
 		"Find the folder with the given UUID in ES."
 		(remarkable--find-entry uuid es))
 
-	      (add-entry-to-contents (e f)
-		"Add E to the contents of F, creating the entry if necessary."
-		(let ((cs (plist-get f :contents)))
-		  (if cs
-		      ;; existing contents, add to the list
-		      (plist-put f :contents (append cs (list e)))
-
-		    ;; no current contents, create a singleton
-		    (plist-put f :contents (list e)))))
-
 	      (fold-entries (notdone done deferred ndeferred)
 		"Fold entries from NOTDONE and DEFERRED into DONE to create hierarchy."
 		(if (null notdone)
@@ -439,7 +427,7 @@ and collections within it."
 			  (if-let ((p (find-collection parent done)))
 			      ;; parent is in done, move to there and continue
 			      (progn
-				(add-entry-to-contents e p)
+				(remarkable--add-entry-to-contents e p)
 				(fold-entries rest done deferred ndeferred))
 
 			    ;; parent not yet processed, defer
@@ -466,6 +454,54 @@ and collections within it."
       nil)))
 
 
+(defun remarkable--add-entry-to-contents (e f)
+  "Add E to the contents of F.
+
+This modifies the contents of F in-place. A contents field is added
+if one does ot already exist."
+  (let ((cs (plist-get f :contents)))
+    (if cs
+	;; existing contents, add to the list
+	(plist-put f :contents (append cs (list e)))
+
+      ;; no current contents, create a singleton
+      (plist-put f :contents (list e)))))
+
+
+(defun remarkable--add-entry (e es)
+  "Add an entry E to ES.
+
+E will be added in the appropriate place in the hierarchy, either
+directly to root collection or the contents of its parent collection."
+  (if (remarkable--entry-is-in-root-collection? e)
+      ;; add entry to es
+      (append es (list e))
+
+    ;; add entry to contents unless it's in the root collection
+    (let ((p (remarkable--find-entry (remarkable--entry-parent e))))
+      (remarkable--add-entry-to-contents e p)
+      es)))
+
+
+(defun remarkable--create-entry (fn content-fn metadata extrafiles)
+  "Create an entry for FN.
+
+CONTENT-FN is the filename used for FN in the cloud, which may
+not be the same as the local system name. METADATA is the
+metadata plist that is added directly to the entry. EXTRAFILES is
+the set of additional files created alongside the metadata and
+the raw content.
+"
+  (let ((hash (remarkable--sha256-file fn))
+	(len (f-length fn)))
+    (list :hash hash
+	  :type "DocumentType"
+	  :filename content-fn
+	  :subfiles (+ 2 (length extrafiles))    ;; content + metadata + others
+	  :length len
+	  :metadata metadata)))
+
+
 (defun remarkable--prettyprint-hierarchy (es)
   "Pretty-print the hierarchy ES."
   (cl-labels ((make-indent (n)
@@ -487,7 +523,7 @@ and collections within it."
 
 (defun remarkable--entry-metadata-get (e k)
   "Return the metadata field K associated with E."
-  (plist-get (remarkable--entry-metadata) k))
+  (plist-get (remarkable--entry-metadata e) k))
 
 (defun remarkable--entry-uuid (e)
   "Return the UUID associated with E."
@@ -511,7 +547,7 @@ and collections within it."
 	 (remarkable--entry-hash e2)))
 
 (defun remarkable--entry-parent (e)
-  "Return the hash of the parent of E.
+  "Return the UUID of the parent of E.
 
 A parent of \"\" indicates the E is in the root collection. A
 parent of \"trash\" indicates a deleted file (see
@@ -602,12 +638,9 @@ strip the extension and replace underscores with spaces.
 			      :lastFinelinerv2Size: 1)))
 
 
-(defun remarkable--create-json-file (json-fn plist)
-  "Write PLIST value JSON to JSON-FN."
-  (let ((json (json-encode plist)))
-    (with-temp-file json-fn
-      (insert json)
-      (json-pretty-print (point-min) (point-max)))))
+(defun remarkable--create-pagedata (fn ext)
+    "Create the page data for FN with type EXT"
+    "Blank\n")
 
 
 ;; ---------- Upload API interactions ----------
@@ -771,41 +804,49 @@ Supported file type extension are given in `remarkable-file-types'."
 If PARENT is omitted the document goes to the root collection."
   (let* ((uuid (remarkable--uuid))
 	 (ext (f-ext fn))
+	 (dir (f-dirname fn))
 	 (name (f-no-ext fn))
+	 (content-fn (f-swap-ext (f-join dir uuid) ext))
 	 (tmp (remarkable--create-temporary-directory-name uuid))
-	 (content-fn (f-swap-ext (f-join tmp uuid) "pdf"))
 	 (metadata-fn (f-swap-ext (f-join tmp uuid) "metadata"))
 	 (metadata (remarkable--create-metadata-plist fn parent))
 	 (metacontent-fn (f-swap-ext (f-join tmp uuid) "content"))
-	 (metacontent (remarkable--create-content-plist "pdf")))
+	 (metacontent (remarkable--create-content-plist "pdf"))
+	 (pagedata-fn (f-swap-ext (f-join tmp uuid) "pagedata"))
+	 (pagedata (remarkable--create-pagedata fn "pdf")))
     (unwind-protect
 	(progn
 	  ;; create the temporary directory
 	  (f-mkdir-full-path tmp)
 
-	  ;; copy-in the content
-	  (f-copy fn content-fn)
-
 	  ;; create the metadata files of different kinds
 	  (remarkable--create-json-file metadata-fn metadata)
 	  (remarkable--create-json-file metacontent-fn metacontent)
+	  (with-temp-file pagedata-fn
+	    (insert pagedata))
 
 	  ;; upload the component files
 	  (mapc #'remarkable--put-blob (list metadata-fn
 					     metacontent-fn
-					     content-fn))
+					     fn))
 
-	  ;; upload the index
+	  ;; upload the index for the new document
 	  (let ((hash (remarkable--sha256-files (list metadata-fn
 						      metacontent-fn
-						      content-fn)))
+						      pagedata-fn
+						      fn)))
 		(index (remarkable--create-index (list metadata-fn
 						       metacontent-fn
-						       content-fn))))
+						       pagedata-fn
+						       (cons fn content-fn)))))
 	    (remarkable--put-blob-data index hash))
 
-	  ;; add the new document to the root index
-	  (remarkable--add-document-to-root-index uuid hash metadata)
+	  ;; add the new document to the hierarchy
+	  (let (e (remarkable--create-entry fn
+					    fn    ; change to a sensible name generator
+					    metadata
+					    (list metacontent-fn pagedata-fn)))
+	    (remarkable--add-entry e remarkable--root-hierarchy))
 
 	  ;; update the root index
 	  (let* ((roothash (remarkable--hash-root-index))

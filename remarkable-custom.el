@@ -2,13 +2,6 @@
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
-;; Author: Simon Dobson <simoninireland@gmail.com>
-;; Maintainer: Simon Dobson <simoninireland@gmail.com>
-;; Version: 0.1.1
-;; Keywords: hypermedia, multimedia
-;; Homepage: https://github.com/simoninireland/remarkable
-;; Package-Requires: ((emacs "27.2") (org "8.0") (org-roam)
-
 ;; This file is NOT part of GNU Emacs.
 ;;
 ;; GNU Emacs is free software: you can redistribute it and/or modify
@@ -26,9 +19,11 @@
 
 ;;; Commentary:
 
-;; Customisation group and values
+;; Customisation group and values.
 
 ;;; Code:
+
+(require 'f)
 
 
 ;; ---------- Customisation group ----------
@@ -51,20 +46,13 @@
   :group Remarkable
   :type 'string)
 
-(defcustom remarkable-user-token nil
-  "The ReMarkable cloud user token for this client."
-  :group Remarkable
-  :type 'string)
 
-(defcustom remarkable-user-token-expires nil
-  "The expiry time of the reMarkable cloud user token."
-  :group Remarkable
-  :type 'number)
+;; ---------- Cache ----------
 
-(defcustom remarkable-sync-version nil
-  "The synchronisation protocol version to use with the ReMarkable cloud."
+(defcustom remarkable--cache-file-name (f-join user-emacs-directory "remarkable-cache.el")
+  "File to store the document cache."
   :group Remarkable
-  :type 'number)
+  :type 'file)
 
 
 ;; ---------- Agent strings ----------
@@ -80,8 +68,7 @@
 This has to be taken from the limited set that the API recognises,
 but apparently has no significance."
   :group Remarkable
-  :type 'string
-  :options )
+  :type 'string)
 
 
 ;; ---------- SHA256 hashes ----------
@@ -116,7 +103,7 @@ extracted from this output using the regexp given in
 `remarkable--sha256-regexp'."
   :group Remarkable
   :type '(alist :key-type string :value-type function)
-  :options '("pdf" "png" "txt"))
+  :options '("pdf"))
 
 
 

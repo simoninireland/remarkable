@@ -2,13 +2,6 @@
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
-;; Author: Simon Dobson <simoninireland@gmail.com>
-;; Maintainer: Simon Dobson <simoninireland@gmail.com>
-;; Version: 0.1.1
-;; Keywords: hypermedia, multimedia
-;; Homepage: https://github.com/simoninireland/remarkable
-;; Package-Requires: ((emacs "27.2") (org "8.0") (org-roam)
-
 ;; This file is NOT part of GNU Emacs.
 ;;
 ;; GNU Emacs is free software: you can redistribute it and/or modify
@@ -34,7 +27,7 @@
 ;;
 ;; The authentication API seems to be stable across changes in the
 ;; sync API. The version of sync expected is encoded in the JSON
-;; Web Token (JWT) used as user token.
+;; Web Token (JWT) used as the user token.
 ;;
 ;; One-time device registration code can be obtained from:
 ;;
@@ -58,8 +51,28 @@
 
 (defconst remarkable-device-token-url "/token/json/2/device/new"
   "Endpoint for acquiring a ReMarkable cloud device token.")
+
 (defconst remarkable-user-token-url "/token/json/2/user/new"
   "Endpoint for acquiring a ReMarkable cloud user token.")
+
+
+;; ---------- Local state ----------
+
+(defvar remarkable-user-token nil
+  "The ReMarkable cloud user token for this client.
+
+Access using `remarkable-token' rather than directly to ensure
+that a new token is acquired when needed, i.e., after expiry.")
+
+(defvar remarkable-user-token-expires nil
+  "The expiry time of the ReMarkable cloud user token.
+
+This is parsed from the user token on acquisition.")
+
+(defvar remarkable-sync-version nil
+  "The synchronisation protocol version to use with the ReMarkable cloud.
+
+This is parsed from the user token on acquisition.")
 
 
 ;; ---------- Public API ----------
@@ -67,7 +80,8 @@
 (defun remarkable-authenticate (code)
   "Authenticate against the ReMarkable cloud.
 
-The one-time CODE should be obtained from
+This needs to be run once per client, providing a one-time CODE
+that should be obtained from
 'https://my.remarkable.com/device/desktop/connect'."
   (interactive "sOne-time code: ")
   (unwind-protect
@@ -103,26 +117,17 @@ code and re-authenticating."
 If the user token has not been acquired, or has expired, a new one
 is obtained."
   (if (or (null remarkable-user-token)
-	  (remarkable--user-token-expired))
+	  (remarkable--user-token-expired?))
       (remarkable--renew-user-token))
   remarkable-user-token)
 
 
-;; ---------- Helper functions ----------
+;; ---------- API interactions ----------
 
-(defun remarkable--user-token-expired ()
+(defun remarkable--user-token-expired? ()
   "True if the user token has expired."
   (time-less-p remarkable-user-token-expires (current-time)))
 
-
-(defun remarkable--uuid ()
-  "Return a new UUID for a document or folder.
-
-We re-use `org-id-uuid' for UUID generation."
-  (org-id-uuid))
-
-
-;; ---------- API interactions ----------
 
 (defun remarkable--uuid ()
   "Ensure we have a UUID for this client, generating one if not."
@@ -156,7 +161,10 @@ the connection from this device to the ReMarkable cloud."
       :success (cl-function (lambda (&key data &allow-other-keys)
 			      (setq remarkable-device-token data)))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error %s" error-thrown))))))
+			    (error "Error %s" error-thrown))))
+
+    ;; return the device token
+    remarkable-device-token))
 
 
 (defun remarkable--parse-user-token (jwt)
@@ -187,8 +195,8 @@ the cloud expects, and the expiry time of the token."
 
 This submits a \"POST\" request against the user token endpoint
 (`remarkable-user-token-url' on `remarkable-auth-host'), passing
-the device token asa bearer authorisation token. This returns
-a JWT user token which is then used as thebearer token for the
+the device token as a bearer authorisation token. This returns
+a JWT user token which is then used as the bearer token for the
 rest of the API. The user token is automatically parsed by
 calling `remarkable--parse-user-token' to extract some information
 about the API to be used."
@@ -203,6 +211,8 @@ about the API to be used."
 			    (remarkable--parse-user-token data)))
     :error (cl-function (lambda (&key error-thrown &allow-other-keys)
 			  (error "Error %s" error-thrown))))
+
+  ;; return the user token
   remarkable-user-token)
 
 

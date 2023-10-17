@@ -2,13 +2,6 @@
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
-;; Author: Simon Dobson <simoninireland@gmail.com>
-;; Maintainer: Simon Dobson <simoninireland@gmail.com>
-;; Version: 0.1.1
-;; Keywords: hypermedia, multimedia
-;; Homepage: https://github.com/simoninireland/remarkable
-;; Package-Requires: ((emacs "27.2") (org "8.0") (org-roam)
-
 ;; This file is NOT part of GNU Emacs.
 ;;
 ;; GNU Emacs is free software: you can redistribute it and/or modify
@@ -48,6 +41,14 @@ The ReMarkable timestamp is measured in mulliseconds since the
 epoch."
   (car (time-convert ts 1000)))
 
+
+;; ---------- UUIDs ----------
+
+(defun remarkable--uuid ()
+  "Return a new UUID for a document or folder.
+
+We re-use `org-id-uuid' for UUID generation."
+  (org-id-uuid))
 
 
 ;; ---------- Temporary files and directories ----------

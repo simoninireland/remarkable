@@ -115,7 +115,7 @@ code and re-authenticating."
 
 
 (defun remarkable-token ()
-  "Return the user token needed to authenticate.
+  "Return the user token needed to authorise operatons.
 
 If the user token has not been acquired, or has expired, a new one
 is obtained."

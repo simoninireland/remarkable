@@ -131,10 +131,7 @@ The hash is a number but returned as a string."
 This simply computes the file hashes and then calls
 `remarkable--sha256-sum'. The hash is a number but is
 returned as a string."
-  (let* ((hs (mapcar (lambda (fn)
-		       (let ((h (remarkable--sha256-file fn)))
-			 (string-to-number h 16)))
-		     fns)))
+  (let* ((hs (mapcar #'remarkable--sha256-file fns)))
     (remarkable--sha256-sum hs)))
 
 

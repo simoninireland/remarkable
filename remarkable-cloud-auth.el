@@ -108,7 +108,7 @@ code and re-authenticating."
 
 (defun remarkable-authenticated? ()
   "True if the client is authenticated to the ReMarkable cloud."
-  (and remarkable-device-token remarkable-user-token t))
+  (and remarkable-device-token t))
 
 
 (defun remarkable-token ()

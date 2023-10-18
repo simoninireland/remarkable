@@ -29,6 +29,7 @@
 
 (require 'request)
 (require 'json)
+(require 'cl)
 
 
 ;; ---------- Web interface ----------
@@ -36,7 +37,7 @@
 ;; Hosts
 
 (defconst remarkable-sync-host "https://internal.cloud.remarkable.com"
-   "Remarkable cloud synchronisation server.")
+  "Remarkable cloud synchronisation server.")
 
 ;; API endpoints
 
@@ -179,8 +180,8 @@ plist with elements:
    - ':hash' the hash identifying the file
    - ':type' the (index-level) file type, /not/ the object-level
      one
-   - ':filename' the filename of the element, based on a
-     UUID, possibly with an extension
+   - ':uuid' the filename of the element, based on a
+     UUID, possibly with an extension for a sub-file
    - ':subfiles' the number of sub-files, and
    - ':length' the length of the element
 
@@ -196,7 +197,7 @@ This function is the dual of `remarkable--create-index'."
 		(cond ((equal (length fields) 5)
 		       (list :hash (nth 0 fields)
 			     :type (nth 1 fields)
-			     :filename (nth 2 fields)
+			     :uuid (nth 2 fields)
 			     :subfiles (string-to-number (nth 3 fields))
 			     :length (string-to-number (nth 4 fields))))
 		      ((equal entry "")
@@ -340,7 +341,7 @@ the metadata for the blob."
   (cl-flet ((metadata-hash (index)
 	      "Return the hash of the metadata blob from INDEX, or nil"
 	      (let ((meta (-filter (lambda (e)
-				     (let ((fn (plist-get e :filename)))
+				     (let ((fn (plist-get e :uuid)))
 				       (and (not (null fn))
 					    (equal (f-ext fn) "metadata"))))
 				   index)))
@@ -483,11 +484,10 @@ directly to root collection or the contents of its parent collection."
       es)))
 
 
-(defun remarkable--create-entry (fn content-fn metadata extrafiles)
+(defun remarkable--create-entry (fn uuid metadata extrafiles)
   "Create an entry for FN.
 
-CONTENT-FN is the filename used for FN in the cloud, which may
-not be the same as the local system name. METADATA is the
+UUID is the UUID used for FN in the cloud. METADATA is the
 metadata plist that is added directly to the entry. EXTRAFILES is
 the set of additional files created alongside the metadata and
 the raw content.
@@ -496,7 +496,7 @@ the raw content.
 	(len (f-length fn)))
     (list :hash hash
 	  :type "DocumentType"
-	  :filename content-fn
+	  :uuid uuid
 	  :subfiles (+ 2 (length extrafiles))    ;; content + metadata + others
 	  :length len
 	  :metadata metadata)))
@@ -505,13 +505,17 @@ the raw content.
 (defun remarkable--prettyprint-hierarchy (es)
   "Pretty-print the hierarchy ES."
   (cl-labels ((make-indent (n)
+		"Return an N-character indent of spaces."
 		(make-string n ?\s))
+
 	      (pp (e indent)
+		"Pretty-print entry E and indentation level N."
 		(let ((print-e (concat (make-indent indent)
 				       (remarkable--entry-name e)
 				       (format " (%s)" (remarkable--entry-uuid e))))
 		      (print-es (mapcar (lambda (e) (pp e (+ indent 3))) (remarkable--entry-contents e))))
 		  (apply #'concat (format "%s\n" print-e) print-es))))
+
     (cl-prettyprint (mapconcat (lambda (e) (pp e 0)) es))))
 
 
@@ -527,7 +531,7 @@ the raw content.
 
 (defun remarkable--entry-uuid (e)
   "Return the UUID associated with E."
-  (plist-get e :filename))
+  (plist-get e :uuid))
 
 (defun remarkable--entry-hash (e)
   "Return the hash associated with E."
@@ -826,9 +830,9 @@ If PARENT is omitted the document goes to the root collection."
 	    (insert pagedata))
 
 	  ;; upload the component files
-	  (mapc #'remarkable--put-blob (list metadata-fn
-					     metacontent-fn
-					     fn))
+	  ;; (mapc #'remarkable--put-blob (list metadata-fn
+	  ;;				     metacontent-fn
+	  ;;				     fn))
 
 	  ;; upload the index for the new document
 	  (let ((hash (remarkable--sha256-files (list metadata-fn
@@ -839,14 +843,17 @@ If PARENT is omitted the document goes to the root collection."
 						       metacontent-fn
 						       pagedata-fn
 						       (cons fn content-fn)))))
-	    (remarkable--put-blob-data index hash))
+	    ;;(remarkable--put-blob-data index hash)
+	    (princ (fprmat "index:\n%s`\"" index))
+	    (princ (format "hash: %s\n" hash)))
 
 	  ;; add the new document to the hierarchy
 	  (let (e (remarkable--create-entry fn
-					    fn    ; change to a sensible name generator
+					    uuid
 					    metadata
 					    (list metacontent-fn pagedata-fn)))
-	    (remarkable--add-entry e remarkable--root-hierarchy))
+	    (remarkable--add-entry e remarkable--root-hierarchy)
+	    (princ (format "entry:\n%s\n" e)))
 
 	  ;; update the root index
 	  (let* ((roothash (remarkable--hash-root-index))
@@ -855,7 +862,9 @@ If PARENT is omitted the document goes to the root collection."
 	    (setq remarkable--generation newgen))
 
 	  ;; finish the upload
-	  (remarkable--upload-complete remarkable--generation))
+	  ;;(remarkable--upload-complete remarkable--generation)
+	  (princ "done\n")
+	  )
 
       ;; clean-up temporary storage
       (if (f-exists? tmp)

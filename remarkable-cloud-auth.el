@@ -85,25 +85,13 @@ that should be obtained from
 	(message "Authenticating...")
 
 	;; create a UUID for this device
-	(unless remakrable-uuid
+	(unless remarkable-uuid
 	  (setq remarkable-uuid (remarkable--uuid)))
 
 	;; get and store the device token
 	(let ((dt (remarkable--register-device code)))
 	  (setq remarkable-device-token dt))
 
-	;; use the device token to acquire a user token
-	(let ((ut (remarkable--renew-user-token)))
-	  (setq remarkable-user-token ut)
-
-	  ;; parse the token
-	  (cl-destructuring-bind (exp proto) (remarkable--parse-user-token ut)
-	    ;; set the expiry time
-	    (setq remarkable--user-token-expire exp)
-
-	    ;; check the protocol version is supported
-	    (if (not (equal proto remarkable-sync-version))
-		(error "Unsupported synchonisation protocol version: %s" proto))))
 	(message "Successfully authenticated"))
 
     (setq remarkable-device-token nil
@@ -133,7 +121,20 @@ If the user token has not been acquired, or has expired, a new one
 is obtained."
   (if (or (null remarkable-user-token)
 	  (remarkable--user-token-expired?))
-      (remarkable--renew-user-token))
+      (let ((ut (remarkable--renew-user-token)))
+	  (setq remarkable-user-token ut)
+
+	  ;; parse the token
+	  (cl-destructuring-bind (exp proto) (remarkable--parse-user-token ut)
+	    ;; check the protocol version is supported
+	    (if (not (equal proto remarkable-sync-version))
+		(error "Unsupported synchonisation protocol version: %s" proto)))
+
+	    ;; set the expiry time
+	    (setq remarkable--user-token-expire exp)
+	    (message "New user token acquired, expires %s"
+		     (format-time-string "%Y-%m-%d %H:%M:%S: exp"))))
+
   remarkable-user-token)
 
 

@@ -38,6 +38,7 @@
 (require 'request)
 (require 'json)
 (require 'jwt)
+(require 'org-id)
 
 
 ;; ---------- Web interface ----------
@@ -84,7 +85,8 @@ that should be obtained from
 	(message "Authenticating...")
 
 	;; create a UUID for this device
-	(setq remarkable-uuid (remarkable--uuid))
+	(unless remakrable-uuid
+	  (setq remarkable-uuid (remarkable--uuid)))
 
 	;; get and store the device token
 	(let ((dt (remarkable--register-device code)))
@@ -143,13 +145,6 @@ is obtained."
 	       (time-convert (current-time) 1)))
 
 
-(defun remarkable--uuid ()
-  "Ensure we have a UUID for this client, generating one if not."
-  (or remarkable-uuid
-      (let ((uuid (org-id-uuid)))
-	(setq remarkable-uuid uuid))))
-
-
 (defun remarkable--register-device (code)
   "Register this application as a device using the one-time CODE.
 
@@ -158,24 +153,24 @@ The one-time code is submitted to the registration API endpoint
 with a device UUID and a device description (held in `remarkable-device').
 This returns a device registration token that persistently identifies
 the connection from this device to the ReMarkable cloud."
-  ;; request a device token using the one-time code
-  (let* ((body (list (cons "code" code)
-		     (cons "deviceDesc" remarkable-device)
-		     (cons "deviceID" remarkable-uuid))))
-    (request (concat remarkable-auth-host remarkable-device-token-url)
-      :type "POST"
-      :parser #'buffer-string
-      :data (json-encode body)
-      :headers (list (cons "Content-Type" "application/json")
-		     (cons "User-Agent" remarkable-user-agent))
-      :sync t
-      :success (cl-function (lambda (&key data &allow-other-keys)
-			      (setq remarkable-device-token data)))
-      :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error %s" error-thrown))))
+  (let (token)
+    (let* ((body (list (cons "code" code)
+		       (cons "deviceDesc" remarkable-device)
+		       (cons "deviceID" remarkable-uuid))))
+      (request (concat remarkable-auth-host remarkable-device-token-url)
+	:type "POST"
+	:parser #'buffer-string
+	:data (json-encode body)
+	:headers (list (cons "Content-Type" "application/json")
+		       (cons "User-Agent" remarkable-user-agent))
+	:sync t
+	:success (cl-function (lambda (&key data &allow-other-keys)
+				(setq token data)))
+	:error (cl-function (lambda (&key error-thrown &allow-other-keys)
+			      (error "Error %s" error-thrown))))
 
-    ;; return the device token
-    remarkable-device-token))
+      ;; return the device token
+      token)))
 
 
 (defun remarkable--parse-user-token (jwt)
@@ -192,7 +187,10 @@ Returns a list containing the expiry time and protocol version."
 	 (sync (if (or (member "sync:fox" scopes)
 		       (member "sync:tortoise" scopes)
 		       (member "sync:hare" scopes))
-		   1.5)))
+		   1.5
+
+		 ;; otherwise return an unknown protocol
+		 'unknown)))
     (list exp sync)))
 
 
@@ -204,20 +202,20 @@ This submits a \"POST\" request against the user token endpoint
 the device token as a bearer authorisation token. This returns
 a JWT user token which is then used as the bearer token for the
 rest of the API."
-  (request (concat remarkable-auth-host remarkable-user-token-url)
-    :type "POST"
-    :parser #'buffer-string
-    :headers (list (cons "User-Agent" remarkable-user-agent)
-		   (cons "Authorization" (concat "Bearer " remarkable-device-token)))
-    :sync t
-    :success (cl-function (lambda (&key data &allow-other-keys)
-			    (setq remarkable-user-token data)
-			    (remarkable--parse-user-token data)))
-    :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			  (error "Error %s" error-thrown))))
+  (let (token)
+    (request (concat remarkable-auth-host remarkable-user-token-url)
+      :type "POST"
+      :parser #'buffer-string
+      :headers (list (cons "User-Agent" remarkable-user-agent)
+		     (cons "Authorization" (concat "Bearer " remarkable-device-token)))
+      :sync t
+      :success (cl-function (lambda (&key data &allow-other-keys)
+			      (setq token data)))
+      :error (cl-function (lambda (&key error-thrown &allow-other-keys)
+			    (error "Error %s" error-thrown)))))
 
   ;; return the user token
-  remarkable-user-token)
+  token)
 
 
 (provide 'remarkable-cloud-auth)

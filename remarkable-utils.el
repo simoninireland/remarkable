@@ -122,7 +122,7 @@ returned as a string."
   "Return the sum of hashes HS.
 
 The hash is a number but returned as a string."
-  (number-to-string (apply #'+ (mapcar #'string-to-number hs))))
+  (format "%x" (apply #'+ (mapcar (lambda (h) (string-to-number h 16)) hs))))
 
 
 (defun remarkable--sha256-files (fns)

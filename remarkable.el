@@ -40,6 +40,9 @@
 ;; Utility functions
 (require 'remarkable-utils)
 
+;; Cache file handling
+(require 'remarkable-cache)
+
 ;; Cloud API
 (require 'remarkable-cloud-auth)
 (require 'remarkable-cloud-sync15)

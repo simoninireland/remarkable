@@ -40,11 +40,10 @@ data structures."
     (delete-region (point-min) (point-max))
 
     ;; insert the structures
-    ;; sd: pretty-printing isn't needed one everything is working
+    ;; sd: pretty-printing isn't needed once everything is working
     (cl-prettyprint `(setq remarkable--hash ,remarkable--hash))
-    (cl-prettyprint `(setq remarkable--generaton ,remarkable--generation))
-    (cl-prettyprint `(setq remarkable--root-hierarchy ',remarkable--root-hierarchy
-			   ))
+    (cl-prettyprint `(setq remarkable--generation ,remarkable--generation))
+    (cl-prettyprint `(setq remarkable--root-hierarchy ',remarkable--root-hierarchy))
 
     (save-buffer)
     (kill-buffer)))

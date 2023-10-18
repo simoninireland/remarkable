@@ -69,11 +69,6 @@ that a new token is acquired when needed, i.e., after expiry.")
 
 This is parsed from the user token on acquisition.")
 
-(defvar remarkable-sync-version nil
-  "The synchronisation protocol version to use with the ReMarkable cloud.
-
-This is parsed from the user token on acquisition.")
-
 
 ;; ---------- Public API ----------
 
@@ -87,13 +82,31 @@ that should be obtained from
   (unwind-protect
       (progn
 	(message "Authenticating...")
-	(remarkable--register-device code)
-	(remarkable--renew-user-token)
+
+	;; create a UUID for this device
+	(setq remarkable-uuid (remarkable--uuid))
+
+	;; get and store the device token
+	(let ((dt (remarkable--register-device code)))
+	  (setq remarkable-device-token dt))
+
+	;; use the device token to acquire a user token
+	(let ((ut (remarkable--renew-user-token)))
+	  (setq remarkable-user-token ut)
+
+	  ;; parse the token
+	  (cl-destructuring-bind (exp proto) (remarkable--parse-user-token ut)
+	    ;; set the expiry time
+	    (setq remarkable--user-token-expire exp)
+
+	    ;; check the protocol version is supported
+	    (if (not (equal proto remarkable-sync-version))
+		(error "Unsupported synchonisation protocol version: %s" proto))))
 	(message "Successfully authenticated"))
-    (unless (and remarkable-device-token remarkable-user-token)
-      (setq remarkable-device-token nil
-	    remarkable-user-token nil)
-      (message "Failed to authenticate"))))
+
+    (setq remarkable-device-token nil
+	  remarkable-user-token nil)
+    (message "Failed to authenticate")))
 
 
 (defun remarkable-deauthenticate ()
@@ -126,7 +139,8 @@ is obtained."
 
 (defun remarkable--user-token-expired? ()
   "True if the user token has expired."
-  (time-less-p remarkable-user-token-expires (current-time)))
+  (time-less-p remarkable-user-token-expires
+	       (time-convert (current-time) 1)))
 
 
 (defun remarkable--uuid ()
@@ -144,9 +158,6 @@ The one-time code is submitted to the registration API endpoint
 with a device UUID and a device description (held in `remarkable-device').
 This returns a device registration token that persistently identifies
 the connection from this device to the ReMarkable cloud."
-  ;; create a UUID for this device
-  (setq remarkable-uuid (remarkable--uuid))
-
   ;; request a device token using the one-time code
   (let* ((body (list (cons "code" code)
 		     (cons "deviceDesc" remarkable-device)
@@ -171,23 +182,18 @@ the connection from this device to the ReMarkable cloud."
   "Parse the JWT user token to extract some API information we need.
 
 Specifically, we extract the version of the synchronisation protocol
-the cloud expects, and the expiry time of the token."
+the cloud expects, and the expiry time of the token.
+
+Returns a list containing the expiry time and protocol version."
   (let* ((es (jwt-decode jwt))
-	 (claims (cadr es)))
-
-    ;; expiry
-    (let ((exp (plist-get claims :exp)))
-      (setq remarkable-user-token-expires exp))
-
-    ;; sync version
-    (let ((scopes (s-split (rx " ") (plist-get claims :scopes))))
-      (if (or (member "sync:fox" scopes)
-	      (member "sync:tortoise" scopes)
-	      (member "sync:hare" scopes))
-	  (setq remarkable-sync-version 1.5)
-
-	;; we only support version 1.5 at the moment
-	(error "Unsupported synchronisation protocol requested")))))
+	 (claims (cadr es))
+	 (exp (plist-get claims :exp))
+	 (scopes (s-split (rx " ") (plist-get claims :scopes)))
+	 (sync (if (or (member "sync:fox" scopes)
+		       (member "sync:tortoise" scopes)
+		       (member "sync:hare" scopes))
+		   1.5)))
+    (list exp sync)))
 
 
 (defun remarkable--renew-user-token ()
@@ -197,9 +203,7 @@ This submits a \"POST\" request against the user token endpoint
 (`remarkable-user-token-url' on `remarkable-auth-host'), passing
 the device token as a bearer authorisation token. This returns
 a JWT user token which is then used as the bearer token for the
-rest of the API. The user token is automatically parsed by
-calling `remarkable--parse-user-token' to extract some information
-about the API to be used."
+rest of the API."
   (request (concat remarkable-auth-host remarkable-user-token-url)
     :type "POST"
     :parser #'buffer-string

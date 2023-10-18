@@ -30,7 +30,7 @@
 
 (defgroup Remarkable nil
   "Connecting to the ReMarkable tablet."
-  :group External
+  :group 'External
   :version 1)
 
 
@@ -38,12 +38,12 @@
 
 (defcustom remarkable-uuid nil
   "The ReMarkable cloud UUID for this client."
-  :group Remarkable
+  :group 'Remarkable
   :type 'string)
 
 (defcustom remarkable-device-token nil
   "The ReMarkable cloud device registration token for this client."
-  :group Remarkable
+  :group 'Remarkable
   :type 'string)
 
 
@@ -51,7 +51,7 @@
 
 (defcustom remarkable--cache-file-name (f-join user-emacs-directory "remarkable-cache.el")
   "File to store the document cache."
-  :group Remarkable
+  :group 'Remarkable
   :type 'file)
 
 
@@ -59,7 +59,7 @@
 
 (defcustom remarkable-user-agent "remarkable-emacs"
   "The user agent string used for communicating with the ReMarkable cloud."
-  :group Remarkable
+  :group 'Remarkable
   :type 'string)
 
 (defcustom remarkable-device "desktop-linux"
@@ -67,7 +67,7 @@
 
 This has to be taken from the limited set that the API recognises,
 but apparently has no significance."
-  :group Remarkable
+  :group 'Remarkable
   :type 'string)
 
 
@@ -80,7 +80,7 @@ This should be a filter taking the data to hash on its standard input
 and returning the hash on standard output. The actual hash will be
 extracted from this output using the regexp given in
 `remarkable--sha256-regexp'."
-  :group Remarkable
+  :group 'Remarkable
   :type '(choice (const :tag "OS X" "shasum -a 256 -")
 		 (const :tag "Linux" "shasum -a 256 -")))
 
@@ -88,7 +88,7 @@ extracted from this output using the regexp given in
 (defcustom remarkable--sha256-regexp  (rx (group (one-or-more (any hex-digit))))
   "Regexp used to extract a SHA256 hash from the output of
 `remarkable--sha256-shell-command'."
-  :group Remarkable
+  :group 'Remarkable
   :type 'regexp)
 
 
@@ -101,7 +101,7 @@ This should be a filter taking the data to hash on its standard input
 and returning the hash on standard output. The actual hash will be
 extracted from this output using the regexp given in
 `remarkable--sha256-regexp'."
-  :group Remarkable
+  :group 'Remarkable
   :type '(alist :key-type string :value-type function)
   :options '("pdf"))
 

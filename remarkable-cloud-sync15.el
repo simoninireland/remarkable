@@ -343,33 +343,28 @@ URL, and dereferences this to get the blob itself."
     blob))
 
 
-(defun remarkable--get-content-hash (hash ext)
-  "Get the hash of the raw content associated with HASH in format EXT.
-
-We first acquire the index associated with HASH, and check for a
-document will include a \".EXT\" file whose hash we return."
-  (if-let* ((index (remarkable--get-index hash))
-	    (ce (-first (lambda (e)
+(defun remarkable--get-content-hash (index ext)
+  "Get the hash of the raw content in INDEX in format EXT."
+  (if-let* ( (ce (-first (lambda (e)
 			   (if-let ((cfn (remarkable--entry-uuid e)))
 			       (equal (f-ext cfn) ext)))
 			 index)))
       (remarkable--entry-hash ce)))
 
 
-(defun remarkable--get-content-types (hash)
-  "Return a list of the content types available for the document HASH.
+(defun remarkable--get-content-types (index)
+  "Return a list of the content types available in INDEX.
 
 The types are a list of extensions, a sub-set of those returned by
 `remarkable--file-types-supported' for which we have handlers."
-  (if-let ((index (remarkable--get-index hash))
-	   (exts (remarkable--file-types-supported)))
+  (if-let ((exts (remarkable--file-types-supported)))
       (mapcan (lambda (ext)
 		(if (-first (lambda (e)
 			      (if-let ((cfn (remarkable--entry-uuid e)))
 				  (equal (f-ext cfn) ext)))
 			    index)
 		    (list ext)))
-		 exts)))
+	      exts)))
 
 
 (defun remarkable--get-content (hash fn)
@@ -379,12 +374,14 @@ The extension of FN will define to the type of content wanted.
 
 Returns nil if there is no associated content of the correct
 type."
-  (if-let* ((ext (f-ext fn))
-	    (contenthash (remarkable--get-content-hash hash ext)))
-      (progn
-	(with-temp-file fn
-	  (insert (remarkable--get-blob contenthash)))
-	t)))
+  (if-let* ((index (remarkable--get-index hash))
+	    (ext (f-ext fn)))
+      (if (member ext (remarkable--get-content-types index))
+	  (let ((contenthash (remarkable--get-content-hash index ext)))
+	    (let ((coding-system-for-write 'no-conversion))
+	      (with-temp-file fn
+		(insert (remarkable--get-blob contenthash)))
+	      t)))))
 
 
 (defun remarkable--download-document (uuid fn)
@@ -396,7 +393,7 @@ type."
       (message "Downloaded \"%s\" into %s" (remarkable--entry-name e) fn)
 
     ;; failed for some reason
-    (error "Failed to download content")))
+    (error "Failed to download %s" fn)))
 
 
 ;; ---------- Object-level metadata management ----------

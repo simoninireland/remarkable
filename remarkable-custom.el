@@ -36,12 +36,12 @@
 
 ;; ---------- Device registration and authentication tokens ----------
 
-(defcustom remarkable-uuid nil
+(defcustom remarkable--device-uuid nil
   "The ReMarkable cloud UUID for this client."
   :group 'Remarkable
   :type 'string)
 
-(defcustom remarkable-device-token nil
+(defcustom remarkable--device-token nil
   "The ReMarkable cloud device registration token for this client."
   :group 'Remarkable
   :type 'string)
@@ -57,12 +57,12 @@
 
 ;; ---------- Agent strings ----------
 
-(defcustom remarkable-user-agent "remarkable-emacs"
+(defcustom remarkable--user-agent "remarkable-emacs"
   "The user agent string used for communicating with the ReMarkable cloud."
   :group 'Remarkable
   :type 'string)
 
-(defcustom remarkable-device "desktop-linux"
+(defcustom remarkable--device-description "desktop-linux"
   "The device string used for communncating with the ReMarkable cloud.
 
 This has to be taken from the limited set that the API recognises,

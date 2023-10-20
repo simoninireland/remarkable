@@ -30,25 +30,24 @@
 (require 'dash)
 (require 'request)
 (require 'json)
-(require 'cl)
 
 
 ;; ---------- Web interface ----------
 
 ;; Hosts
 
-(defconst remarkable-sync-host "https://internal.cloud.remarkable.com"
+(defconst remarkable--sync-host "https://internal.cloud.remarkable.com"
   "Remarkable cloud synchronisation server.")
 
 ;; API endpoints
 
-(defconst remarkable-download-url "/sync/v2/signed-urls/downloads"
+(defconst remarkable--download-url "/sync/v2/signed-urls/downloads"
   "Endpoint for retrieving ReMarkable cloud documents.")
 
-(defconst remarkable-upload-url "/sync/v2/signed-urls/uploads"
+(defconst remarkable--upload-url "/sync/v2/signed-urls/uploads"
   "Endpoint for submitting documents to the ReMarkable cloud.")
 
-(defconst remarkable-sync-complete-url "/sync/v2/sync-complete"
+(defconst remarkable--sync-complete-url "/sync/v2/sync-complete"
   "Endpoint for terminting a sync session with the ReMarkable cloud.")
 
 ;; HTTP headers
@@ -65,17 +64,14 @@
 
 ;; Constants
 
-(defconst remarkable-sync-version 1.5
+(defconst remarkable--sync-version 1.5
   "Supported version of the ReMarkable synchronisation protocol.")
 
-(defconst remarkable-index-schema-version 3
+(defconst remarkable--index-schema-version 3
   "Supported version of the ReMarkable index schema.")
 
 
 ;; ---------- State variables and cache ----------
-
-(defvar remarkable--root-index nil
-  "Will be deleted after debugging...")
 
 (defvar remarkable--root-hierarchy nil
   "The collection and document hierarchy, extracted from the root index.")
@@ -89,13 +85,6 @@
 
 ;; ---------- Public API ----------
 
-(defun remarkable--file-types-supported ()
-  "Return a list 0f the file types we support.
-
-This should be extracted from `remarkable--file-types-plist'."
-  (list "pdf" "epub" "rm" "lines"))
-
-
 (defun remarkable-init ()
   "Initialise the link to the ReMarkable cloud.
 
@@ -104,10 +93,9 @@ token the first time), downloads the root index, and constructs a
 collection hierarchy for all the objects."
   (interactive)
   (unless (remarkable-authenticated?)
-    (call-interactively remarkable-authenticate))
+    (call-interactively #'remarkable-authenticate))
 
   (cl-destructuring-bind (hash gen index) (remarkable--get-root-index)
-    (setq remarkable--root-index index)	;; for debugging
     (setq remarkable--hash hash
 	  remarkable--generation gen
 	  remarkable--root-hierarchy (remarkable--make-collection-hierarchy index)))
@@ -144,39 +132,45 @@ flat list of index entries with metadata.
 
 Use `remarkable--make-collection-hierarchy' to extract the
 hierarchical structure of the index entries"
-  (let* ((folder (remarkable--get-blob-url))
-	 (hash-gen (remarkable--get-hash-generation folder))
-	 (index (remarkable--get-index (car hash-gen))))
-    (remarkable--add-metadata index)
-    (list (car hash-gen) (cadr hash-gen) index)))
+  (let* ((root (remarkable--get-blob-url)))
+    (cl-destructuring-bind (hash gen) (remarkable--get-hash-generation root)
+      (let ((index (remarkable--get-index hash)))
+	(remarkable--add-metadata index)
+	(list hash gen index)))))
 
 
-(defun remarkable--create-root-index ()
-  "Create a raw index to be uploaded.
-
-This traverses the `remarkable--root-hierarchy' to determine
-hashes and sub-files.
+(defun remarkable--create-root-index (hier)
+  "Create a raw index from HIER, suitable to be uploaded.
 
 Return a list consisting of the index and the hash."
   (cl-labels ((insert-index-line (e)
 		"Insert an index line for entry E."
 		(when e
-		  (let ((hash (remarkable--entry-hash e))
-			(fn (remarkable--entry-uuid e))
-			(length (remarkable--entry-length e))
-			(subfiles (remarkable--entry-subfiles e))
-			(contents (remarkable--entry-contents e)))
+		  (let ((hash (remarkable-entry-hash e))
+			(fn (remarkable-entry-uuid e))
+			(length (remarkable-entry-length e))
+			(subfiles (remarkable-entry-subfiles e))
+			(contents (remarkable-entry-contents e)))
 		    (insert (format "%s:80000000:%s:%s:%s\n" hash fn subfiles length))
 		    (if contents
 			(mapc #'insert-index-line contents))))))
 
     (let* ((index (with-temp-buffer
-		    (insert (format "%s\n" remarkable-index-schema-version)) ;; schema version
-		    (mapc #'insert-index-line remarkable--root-hierarchy)    ;; entries
+		    (insert (format "%s\n" remarkable--index-schema-version)) ; schema version
+		    (mapc #'insert-index-line hier) ; entries
 		    (buffer-string)))
-	   (hs (mapcar #'remarkable--entry-hash remarkable--root-hierarchy))
+	   (hs (remarkable--entry-hashes hier))
 	   (hash (remarkable--sha256-sum hs)))
       (list index hash))))
+
+
+;; ---------- File type handling ----------
+
+(defun remarkable--file-types-supported ()
+  "Return a list 0f the file types we support.
+
+This should be extracted from `remarkable--file-types-plist'."
+  (list "pdf" "epub" "rm" "lines"))
 
 
 ;; ---------- Index handling ----------
@@ -231,7 +225,7 @@ This function is the dual of `remarkable--create-index'."
 
     ;; check that the index has the correct schema,
     ;; which is given by the first line
-    (if (not (equal (string-to-number (car lines)) remarkable-index-schema-version))
+    (if (not (equal (string-to-number (car lines)) remarkable--index-schema-version))
 	(error "Wrong schema version: %s" (car lines)))
 
     ;; generate entries for the rest of the lines
@@ -260,7 +254,7 @@ This function is essentially the dual of `remarkable--parse-index'."
 		(insert (format "%s:80000000:%s:0:%s\n" hash indexname length)))))
 
     (with-temp-buffer
-      (insert (format "%s\n" remarkable-index-schema-version))
+      (insert (format "%s\n" remarkable--index-schema-version))
       (mapc #'insert-index-line fns)
       (buffer-string))))
 
@@ -285,11 +279,11 @@ a \"GET\" request in its payload.)"
   (let ((body (list (cons "http_method" "GET")
 		    (cons "relative_path" (or hash "root"))))
 	url)
-    (request (concat remarkable-sync-host remarkable-download-url)
+    (request (concat remarkable--sync-host remarkable--download-url)
       :type "POST"
       :parser #'json-read
       :data (json-encode body)
-      :headers (list (cons "User-Agent" remarkable-user-agent)
+      :headers (list (cons "User-Agent" remarkable--user-agent)
 		     (cons "Authorization" (concat "Bearer " (remarkable-token)))
 		     (cons "Content-Type" "application/json"))
       :sync t
@@ -311,7 +305,7 @@ returned as a list."
     (request url
       :type "GET"
       :parser #'buffer-string
-      :headers (list (cons "User-Agent" remarkable-user-agent)
+      :headers (list (cons "User-Agent" remarkable--user-agent)
 		     (cons "Authorization" (concat "Bearer " (remarkable-token))))
       :sync t
       :success (cl-function (lambda (&key response data &allow-other-keys)
@@ -332,7 +326,7 @@ URL, and dereferences this to get the blob itself."
     (request url
       :type "GET"
       :parser #'buffer-string
-      :headers (list (cons "User-Agent" remarkable-user-agent)
+      :headers (list (cons "User-Agent" remarkable--user-agent)
 		     (cons "Authorization" (concat "Bearer " (remarkable-token))))
       :sync t
       :timeout 10
@@ -349,7 +343,7 @@ URL, and dereferences this to get the blob itself."
 			   (if-let ((cfn (remarkable--entry-uuid e)))
 			       (equal (f-ext cfn) ext)))
 			 index)))
-      (remarkable--entry-hash ce)))
+      (remarkable-entry-hash ce)))
 
 
 (defun remarkable--get-content-types (index)
@@ -360,7 +354,7 @@ The types are a list of extensions, a sub-set of those returned by
   (if-let ((exts (remarkable--file-types-supported)))
       (mapcan (lambda (ext)
 		(if (-first (lambda (e)
-			      (if-let ((cfn (remarkable--entry-uuid e)))
+			      (if-let ((cfn (remarkable-entry-uuid e)))
 				  (equal (f-ext cfn) ext)))
 			    index)
 		    (list ext)))
@@ -387,7 +381,7 @@ type."
 (defun remarkable--download-document (uuid fn)
   "Download the content of the document with the given UUID into FN."
   (if-let* ((e (remarkable--find-entry uuid remarkable--root-hierarchy))
-	    (hash (remarkable--entry-hash e))
+	    (hash (remarkable-entry-hash e))
 	    (success (remarkable--get-content hash fn)))
       ;; file successfully downloaded
       (message "Downloaded \"%s\" into %s" (remarkable--entry-name e) fn)
@@ -398,30 +392,26 @@ type."
 
 ;; ---------- Object-level metadata management ----------
 
-(defun remarkable--add-metadata (ls)
-  "Add document-level metadata to the folder structure LS.
+(defun remarkable--add-metadata (es)
+  "Add document-level metadata to the entries ES.
 
-Each entry in LS is queried for metadata using `remarkable--get-metadata'.
+Each entry in ES is queried for metadata using `remarkable--get-metadata'.
 If found, the metadata is added as a plist associated with
 the ':metadata' tag."
   (mapc (lambda (e)
-	  (if-let* ((hash (plist-get e :hash))
+	  (if-let* ((hash (remarkable-entry-hash e))
 		    (metadata (remarkable--get-metadata hash)))
 	      (plist-put e :metadata metadata)))
-	ls))
+	es))
 
 
-(defun remarkable--get-metadata-hash (hash)
-  "Get the hash of the metadata associated with HASH.
-
-We first acquire the index associated with HASH, which for a document
-will include a \".metadata\" file whose hash we return."
-  (if-let* ((index (remarkable--get-index hash))
-	    (meta (-first (lambda (e)
-			    (if-let ((mfn (remarkable--entry-uuid e)))
+(defun remarkable--get-metadata-hash (index)
+  "Get the hash of the metadata associated with INDEX."
+  (if-let* ((meta (-first (lambda (e)
+			    (if-let ((mfn (remarkable-entry-uuid e)))
 				(equal (f-ext mfn) "metadata")))
 			 index)))
-      (remarkable--entry-hash meta)))
+      (remarkable-entry-hash meta)))
 
 
 (defun remarkable--get-metadata (hash)
@@ -429,7 +419,8 @@ will include a \".metadata\" file whose hash we return."
 
 Return nil if there is no associated metadata, which typically means that
 HASH identifies a collection, not a document."
-  (if-let* ((metahash (remarkable--get-metadata-hash hash))
+  (if-let* ((index (remarkable--get-index hash))
+	    (metahash (remarkable--get-metadata-hash index))
 	    (raw-metadata (remarkable--get-blob metahash))
 	    (metadata (json-parse-string raw-metadata
 					 :object-type 'plist)))
@@ -447,7 +438,7 @@ and sub-collection has a \":contents\" property that contains the documents
 and collections within it.
 
 We retain /all/ entries, including deleted ones. Other functions
-can use `remarkable--entry-is-deleted?' to elide deleted entries
+can use `remarkable-entry-is-deleted?' to elide deleted entries
 if required/"
 
   ;; The problem with this operation is that the hierarchy is only encoded
@@ -504,15 +495,15 @@ if required/"
 		  ;; process the next entry
 		  (let ((e (copy-entry (car notdone)))
 			(rest (cdr notdone)))
-		    (if (or (remarkable--entry-is-deleted? e)
-			    (remarkable--entry-is-in-root-collection? e))
+		    (if (or (remarkable-entry-is-deleted? e)
+			    (remarkable-entry-is-in-root-collection? e))
 			;; entry is in root collection, move to done
 			;; deleted entries are treated as being in root
 			(progn
 			  (fold-entries rest (append done (list e)) deferred ndeferred))
 
 		      ;; entry is in some other collection, search for it
-		      (let ((parent (remarkable--entry-parent e)))
+		      (let ((parent (remarkable-entry-parent e)))
 			;; look for parent in done
 			(if-let ((p (find-collection parent done)))
 			    ;; parent is in done, move to there and continue
@@ -540,7 +531,7 @@ This looks only in the index entries, not in the metadata."
 		(check-contents (e)
 		  "Check the contents of E."
 		  (mapc #'check-entry
-			(remarkable--entry-contents e))))
+			(remarkable-entry-contents e))))
 
       (mapc #'check-entry es)
 
@@ -557,6 +548,15 @@ This looks only in the index entries, not in the metadata."
    "Find the entry with the given HASH in (possibly nested) structure ES"
    (remarkable--find-entry-by-key-value :hash hash es))
 
+(defun remarkable--entry-hashes (es)
+  "Extract all the hashes from the (possibly nested) entries in ES."
+  (cl-labels ((entry-hashes (e)
+		"Return a list of hashes for E, including those of its contents."
+		(let ((h (remarkable-entry-hash e))
+		      (chs (mapcan #'entry-hashes (remarkable-entry-contents e))))
+		  (cons h chs))))
+
+    (mapcan #'entry-hashes es)))
 
 (defun remarkable--add-entry-to-contents (e f)
   "Add E to the contents of F.
@@ -576,27 +576,26 @@ if one does ot already exist."
   "Add an entry E to ES.
 
 E will be added in the appropriate place in the hierarchy, either
-directly to root collection or the contents of its parent collection."
-  (if (remarkable--entry-is-in-root-collection? e)
+directly to the root collection or the contents of its parent collection."
+  (if (remarkable-entry-is-in-root-collection? e)
       ;; add entry to es
       (append es (list e))
 
     ;; add entry to parent's contents
-    (let ((p (remarkable--find-entry (remarkable--entry-parent e) es)))
+    (let ((p (remarkable--find-entry (remarkable-entry-parent e) es)))
       (remarkable--add-entry-to-contents e p)
       es)))
 
 
-(defun remarkable--create-entry (fn uuid metadata extrafiles)
+(defun remarkable--create-entry (fn uuid hash metadata extrafiles)
   "Create an entry for FN.
 
-UUID is the UUID used for FN in the cloud. METADATA is the
-metadata plist that is added directly to the entry. EXTRAFILES is
-the set of additional files created alongside the metadata and
-the raw content.
+UUID is the UUID used for FN in the cloud, with hash HASH.
+METADATA is the metadata plist that is added directly to the
+entry. EXTRAFILES is the set of additional files created
+alongside the metadata and the raw content.
 "
-  (let ((hash (remarkable--sha256-file fn))
-	(len (f-length fn)))
+  (let ((len (f-length fn)))
     (list :hash hash
 	  :type "DocumentType"
 	  :uuid uuid
@@ -614,82 +613,84 @@ the raw content.
 	      (pp (e indent)
 		"Pretty-print entry E and indentation level N."
 		(let ((print-e (concat (make-indent indent)
-				       (remarkable--entry-name e)
+				       (remarkable-entry-name e)
 				       (format " (%s)"
-					       (if (remarkable--entry-is-deleted? e)
+					       (if (remarkable-entry-is-deleted? e)
 						   "deleted"
-						 (remarkable--entry-uuid e)))))
-		      (print-es (mapcar (lambda (e) (pp e (+ indent 3))) (remarkable--entry-contents e))))
+						 (remarkable-entry-uuid e)))))
+		      (print-es (mapcar (lambda (e) (pp e (+ indent 3)))
+					(remarkable-entry-contents e))))
 		  (apply #'concat (format "%s\n" print-e) print-es))))
 
-    (cl-prettyprint (mapconcat (lambda (e) (pp e 0)) es))))
+    (cl-prettyprint (mapconcat (lambda (e)
+				 (pp e 0)) es))))
 
 
 ;; Field access for common information from entries
 
-(defun remarkable--entry-metadata (e)
+(defun remarkable-entry-metadata (e)
   "Return the object-level metedata associated with E."
   (plist-get e :metadata))
 
-(defun remarkable--entry-metadata-get (e k)
+(defun remarkable-entry-metadata-get (e k)
   "Return the metadata field K associated with E."
   (plist-get (remarkable--entry-metadata e) k))
 
-(defun remarkable--entry-uuid (e)
+(defun remarkable-entry-uuid (e)
   "Return the UUID associated with E."
   (plist-get e :uuid))
 
-(defun remarkable--entry-hash (e)
+(defun remarkable-entry-hash (e)
   "Return the hash associated with E."
   (plist-get e :hash))
 
-(defun remarkable--entry-length (e)
+(defun remarkable-entry-length (e)
   "Return the length of E."
   (plist-get e :length))
 
-(defun remarkable--entry-subfiles (e)
+(defun remarkable-entry-subfiles (e)
   "Return the number of sub-files associated with E."
   (plist-get e :subfiles))
 
-(defun remarkable--entry-changed? (e1 e2)
+(defun remarkable-entry-changed? (e1 e2)
   "Check whether E1 and E2 have the same hash."
-  (equal (remarkable--entry-hash e1)
-	 (remarkable--entry-hash e2)))
+  (equal (remarkable-entry-hash e1)
+	 (remarkable-entry-hash e2)))
 
-(defun remarkable--entry-parent (e)
+(defun remarkable-entry-parent (e)
   "Return the UUID of the parent of E.
 
 A parent of \"\" indicates the E is in the root collection. A
 parent of \"trash\" indicates a deleted file (see
-`remarkable--entry-is-deleted?'."
-  (remarkable--entry-metadata-get e :parent))
+`remarkable-entry-is-deleted?'."
+  (remarkable-entry-metadata-get e :parent))
 
-(defun remarkable--entry-is-in-root-collection? (e)
+(defun remarkable-entry-is-in-root-collection? (e)
   "Test whether E is in the root collection.
 
 E may represent a document or a collection. It is in the root
 collection if its parent is \"\"."
-  (let ((p (remarkable--entry-parent e)))
+  (let ((p (remarkable-entry-parent e)))
     (or (null p)
 	(equal p ""))))
 
-(defun remarkable--entry-name (e)
+(defun remarkable-entry-name (e)
   "Return the visible name associated with E."
-  (remarkable--entry-metadata-get e :visibleName))
+  (remarkable-entry-metadata-get e :visibleName))
 
-(defun remarkable--entry-is-collection? (e)
+(defun remarkable-entry-is-collection? (e)
   "Check whether E is a collection (folder)."
-   (equal (remarkable--entry-metadata-get e :type) "CollectionType"))
+   (equal (remarkable-entry-metadata-get e :type) "CollectionType"))
 
-(defun remarkable--entry-is-document? (e)
+(defun remarkable-entry-is-document? (e)
   "Check whether E is a document."
-    (equal (remarkable--entry-metadata-get e :type) "DocumentType"))
+    (equal (remarkable-entry-metadata-get e :type) "DocumentType"))
 
-(defun remarkable--entry-is-deleted? (e)
+(defun remarkable-entry-is-deleted? (e)
   "Check whether E has been deleted."
-  (equal (remarkable--entry-metadata-get e :parent) "trash"))
+  (equal (remarkable-entry-metadata-get e :parent) "trash"))
 
-(defun remarkable--entry-contents (e)
+(defun remarkable-entry-contents (e)
   "Return the list of sub-entries of E."
   (plist-get e :contents))
 
@@ -710,9 +711,13 @@ strip the extension and replace underscores with spaces.
 (defun remarkable--create-metadata-plist (fn parent)
   "Create a metadata plist for FN going into PARENT."
   (list :visibleName (remarkable--filename-to-name fn)
+	:version 0
 	:type "DocumentType"
 	:parent parent
 	:synced t
+	:pinned :false
+	:modified :false
+	:deleted :false
 	:lastModified (remarkable--lisp-timestamp (current-time))))
 
 
@@ -762,11 +767,11 @@ a \"PUT\" request in its payload.)"
   (let ((body (list (cons "http_method" "PUT")
 		    (cons "relative_path" hash)))
 	url maxUpload)
-    (request (concat remarkable-sync-host remarkable-upload-url)
+    (request (concat remarkable--sync-host remarkable--upload-url)
       :type "POST"
       :parser #'json-read
       :data (json-encode body)
-      :headers (list (cons "User-Agent" remarkable-user-agent)
+      :headers (list (cons "User-Agent" remarkable--user-agent)
 		     (cons "Authorization" (concat "Bearer " (remarkable-token)))
 		     (cons "Content-Type" "application/json"))
       :sync t
@@ -786,15 +791,13 @@ an upload URL for that hash using `remarkable--get-blob-upload-url',
 and then making a \"PUT\" request against this URL to upload DATA."
    (unless hash
      (setq hash (remarkable--sha256-data data)))
-   (let* ((url-max (remarkable--get-blob-upload-url hash))
-	  (url (car url-max))
-	  (maxUpload (cadr url-max)))
+   (cl-destructuring-bind (url maxUpload) (remarkable--get-blob-upload-url hash)
      (request url
        :type "PUT"
        ;; :files (list (cons "upload" fn))
        :data data
        :parser #'buffer-string
-       :headers (list (cons "User-Agent" remarkable-user-agent)
+       :headers (list (cons "User-Agent" remarkable--user-agent)
 		      (cons remarkable--content-length-range-header (format "0,%s" maxUpload))
 		      (cons "Authorization" (concat "Bearer " (remarkable-token))))
        :sync t
@@ -832,13 +835,13 @@ a \"PUT\" request in its payload.)"
   (let ((body (list (cons "http_method" "PUT")
 		    (cons "relative_path" "root")
 		    (cons "root_schema" hash)
-		    (cons "generation" gen)))
+		    (cons "generation" (string-to-number gen))))
 	url maxUpload)
-    (request (concat remarkable-sync-host remarkable-upload-url)
+    (request (concat remarkable--sync-host remarkable--upload-url)
       :type "POST"
       :parser #'json-read
       :data (json-encode body)
-      :headers (list (cons "User-Agent" remarkable-user-agent)
+      :headers (list (cons "User-Agent" remarkable--user-agent)
 		     (cons "Authorization" (concat "Bearer " (remarkable-token)))
 		     (cons "Content-Type" "application/json"))
       :sync t
@@ -852,25 +855,23 @@ a \"PUT\" request in its payload.)"
 
 (defun remarkable--put-root-index (hash gen)
   "Write a new root index for HASH and GEN, returning a new generation."
-  (let* ((url-max (remarkable--get-root-index-upload-url hash gen))
-	 (url (car url-max))
-	 (maxUpload (cadr url-max))
-	 newgen)
-     (request url
-       :type "PUT"
-       :data hash
-       :parser #'buffer-string
-       :headers (list (cons "User-Agent" remarkable-user-agent)
-		      (cons remarkable--generation-match-header gen)
-		      (cons remarkable--content-length-range-header (format "0,%s" maxUpload))
-		      (cons "Authorization" (concat "Bearer " (remarkable-token))))
-       :sync t
-       :success (cl-function (lambda (&key response &allow-other-keys)
-			       (setq newgen (request-response-header response remarkable--generation-header))
-			       (message "Uploaded root index (new generation %s)" newgen)))
-       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			     (error "Error in uploading root index: %s" error-thrown))))
-     newgen))
+  (cl-destructuring-bind (url maxUpload) (remarkable--get-root-index-upload-url hash gen)
+    (let (newgen)
+      (request url
+	:type "PUT"
+	:data hash
+	:parser #'buffer-string
+	:headers (list (cons "User-Agent" remarkable--user-agent)
+		       (cons remarkable--generation-match-header (string-to-number gen))
+		       (cons remarkable--content-length-range-header (format "0,%s" maxUpload))
+		       (cons "Authorization" (concat "Bearer " (remarkable-token))))
+	:sync t
+	:success (cl-function (lambda (&key response &allow-other-keys)
+				(setq newgen (request-response-header response remarkable--generation-header))
+				(message "Uploaded root index (new generation %s)" newgen)))
+	:error (cl-function (lambda (&key error-thrown &allow-other-keys)
+			      (error "Error in uploading root index: %s" error-thrown))))
+      newgen)))
 
 
 (defun remarkable--upload-complete (gen)
@@ -878,12 +879,12 @@ a \"PUT\" request in its payload.)"
 
 This performs a \"POST\" request against the completion endpoint
 (`remarkable-sync-complete-url' on `remarkable-sync-host')."
-  (let ((body (list (cons "generation" gen))))
-    (request (concat remarkable-sync-host remarkable-sync-complete-url)
+  (let ((body (list (cons "generation" (string-to-number gen)))))
+    (request (concat remarkable--sync-host remarkable--sync-complete-url)
       :type "POST"
       :parser #'buffer-string
       :data (json-encode body)
-      :headers (list (cons "User-Agent" remarkable-user-agent)
+      :headers (list (cons "User-Agent" remarkable--user-agent)
 		     (cons "Authorization" (concat "Bearer " (remarkable-token)))
 		     (cons "Content-Type" "application/json"))
       :sync t
@@ -897,12 +898,11 @@ This performs a \"POST\" request against the completion endpoint
   "Check that the file type of FN is supported.
 
 Supported file type extension are given in `remarkable-file-types'."
-  ;; Change to use custom options
   (let ((ext (f-ext fn)))
-    (member ext (remarkable-file-types-supported))))
+    (member ext (remarkable--file-types-supported))))
 
 
-(cl-defun remarkable--upload-document (fn &optional (parent "root"))
+(cl-defun remarkable--upload-document (fn &optional (parent ""))
   "Upload document FN to given PARENT.
 
 If PARENT is omitted the document goes to the root collection."
@@ -920,6 +920,17 @@ If PARENT is omitted the document goes to the root collection."
 	 (pagedata (remarkable--create-pagedata fn "pdf")))
     (unwind-protect
 	(progn
+	  ;; check the parent exists and is a collection
+	  (if (not (or (null parent)
+		       (equal parent "")))
+	      (let ((p (remarkable--find-entry parent remarkable--root-hierarchy)))
+		(if (null p)
+		    ;; parent doesn't exist
+		    (error "Parent %s doesn't exist" parent)
+
+		  (if (not (remarkable-entry-is-collection? p))
+		      (error "Parent %s is not a collection" parent)))))
+
 	  ;; create the temporary directory
 	  (f-mkdir-full-path tmp)
 
@@ -935,7 +946,7 @@ If PARENT is omitted the document goes to the root collection."
 					     pagedata-fn
 					     fn))
 
-	  ;; upload the index for the new document
+	  ;; update the document index and cache entry
 	  (let ((hash (remarkable--sha256-files (list metadata-fn
 						      metacontent-fn
 						      pagedata-fn
@@ -944,29 +955,35 @@ If PARENT is omitted the document goes to the root collection."
 						       metacontent-fn
 						       pagedata-fn
 						       (cons fn content-fn)))))
-	    (remarkable--put-blob-data index hash))
+	    ;; upload the index for the new document
+	    (remarkable--put-blob-data index hash)
 
-	  ;; add the new document to the hierarchy
-	  (let ((e (remarkable--create-entry fn
-					     uuid
-					     metadata
-					     (list metacontent-fn pagedata-fn))))
-	    (remarkable--add-entry e remarkable--root-hierarchy))
+	    ;; add the new document to the hierarchy
+	    (let* ((e (remarkable--create-entry fn
+						uuid
+						hash
+						metadata
+						(list metacontent-fn pagedata-fn)))
+		   (hier (remarkable--add-entry e remarkable--root-hierarchy)))
 
-	  ;; update the root index
-	  (cl-destructuring-bind (index roothash) (remarkable--create-root-index)
-	    ;; upload the index
-	    (remarkable--put-blob-data index roothash)
+	      ;; update the root index
+	      (cl-destructuring-bind (rootindex roothash) (remarkable--create-root-index hier)
+		(princ (format "old %s\nnew %s\n" remarkable--hash roothash))
+		;; upload the index to its new hash
+		(remarkable--put-blob-data rootindex roothash)
+		(princ "done\n")
 
-	    ;; upload the new root index hash
-	    (let ((newgen (remarkable--put-root-index roothash
-						      remarkable--generation)))
-	      ;; update our state to reflect the new root index and generation
-	      (setq remarkable--hash roothash
-		    remarkable--generation newgen)))
+		;; upload the new root index hash
+		(let ((newgen (remarkable--put-root-index roothash
+							  remarkable--generation)))
+		  (princ (format "oldgen %s\nnewgen %s\n" remarkable--generation newgen))
+		  ;; finish the upload
+		  (remarkable--upload-complete newgen)
 
-	  ;; finish the upload
-	  (remarkable--upload-complete remarkable--generation)
+		  ;; update our state to reflect the new root index and generation
+		  (setq remarkable--root-hierarchy hier
+			remarkable--hash roothash
+			remarkable--generation newgen)))))
 
 	  ;; return the UUID of the newly-uploaded document
 	  uuid)

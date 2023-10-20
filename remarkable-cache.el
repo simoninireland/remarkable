@@ -23,8 +23,6 @@
 
 ;;; Code:
 
-(require 'cl)
-
 
 ;; ---------- Cache file handling ----------
 
@@ -36,7 +34,7 @@ data structures."
   (with-temp-file fn
     (prin1 `(:hash ,remarkable--hash
 	     :generation ,remarkable--generation
-	     :hierarchy ',remarkable--root-hierarchy)
+	     :hierarchy ,remarkable--root-hierarchy)
 	   (current-buffer))))
 
 

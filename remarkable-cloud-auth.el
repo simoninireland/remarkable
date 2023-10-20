@@ -45,27 +45,27 @@
 
 ;; Hosts
 
-(defconst remarkable-auth-host "https://webapp-prod.cloud.remarkable.engineering"
+(defconst remarkable--auth-host "https://webapp-prod.cloud.remarkable.engineering"
   "Remarkable cloud authentication server.")
 
 ;; API endpoints
 
-(defconst remarkable-device-token-url "/token/json/2/device/new"
+(defconst remarkable--device-token-url "/token/json/2/device/new"
   "Endpoint for acquiring a ReMarkable cloud device token.")
 
-(defconst remarkable-user-token-url "/token/json/2/user/new"
+(defconst remarkable--user-token-url "/token/json/2/user/new"
   "Endpoint for acquiring a ReMarkable cloud user token.")
 
 
 ;; ---------- Local state ----------
 
-(defvar remarkable-user-token nil
+(defvar remarkable--user-token nil
   "The ReMarkable cloud user token for this client.
 
 Access using `remarkable-token' rather than directly to ensure
 that a new token is acquired when needed, i.e., after expiry.")
 
-(defvar remarkable-user-token-expires nil
+(defvar remarkable--user-token-expires nil
   "The expiry time of the ReMarkable cloud user token.
 
 This is parsed from the user token on acquisition.")
@@ -80,23 +80,18 @@ This needs to be run once per client, providing a one-time CODE
 that should be obtained from
 'https://my.remarkable.com/device/desktop/connect'."
   (interactive "sOne-time code: ")
-  (unwind-protect
-      (progn
-	(message "Authenticating...")
+  (message "Authenticating...")
 
-	;; create a UUID for this device
-	(unless remarkable-uuid
-	  (setq remarkable-uuid (remarkable--uuid)))
+  ;; create a UUID for this device
+  (unless remarkable--device-uuid
+    (setq remarkable--device-uuid (remarkable--uuid)))
 
-	;; get and store the device token
-	(let ((dt (remarkable--register-device code)))
-	  (setq remarkable-device-token dt))
+  ;; get and store the device token
+  (let ((dt (remarkable--register-device code)))
+    (setq remarkable--device-token dt))
 
-	(message "Successfully authenticated"))
-
-    (setq remarkable-device-token nil
-	  remarkable-user-token nil)
-    (message "Failed to authenticate")))
+  (message "Successfully authenticated")
+  remarkable--device-token)
 
 
 (defun remarkable-deauthenticate ()
@@ -104,14 +99,14 @@ that should be obtained from
 
 Calling this function will require getting another one-time
 code and re-authenticating."
-  (setq remarkable-device-token nil
-	remarkable-user-token nil)
+  (setq remarkable--device-token nil
+	remarkable--user-token nil)
   (message "De-authenticated successfully"))
 
 
 (defun remarkable-authenticated? ()
   "True if the client is authenticated to the ReMarkable cloud."
-  (and remarkable-device-token t))
+  (and remarkable--device-token t))
 
 
 (defun remarkable-token ()
@@ -119,30 +114,30 @@ code and re-authenticating."
 
 If the user token has not been acquired, or has expired, a new one
 is obtained."
-  (if (or (null remarkable-user-token)
+  (if (or (null remarkable--user-token)
 	  (remarkable--user-token-expired?))
       (let ((ut (remarkable--renew-user-token)))
-	  (setq remarkable-user-token ut)
+	  (setq remarkable--user-token ut)
 
 	  ;; parse the token
 	  (cl-destructuring-bind (exp proto) (remarkable--parse-user-token ut)
 	    ;; check the protocol version is supported
-	    (if (not (equal proto remarkable-sync-version))
+	    (if (not (equal proto remarkable--sync-version))
 		(error "Unsupported synchonisation protocol version: %s" proto))
 
 	    ;; set the expiry time
-	    (setq remarkable-user-token-expires exp)
+	    (setq remarkable--user-token-expires exp)
 	    (message "New user token acquired, expires %s"
 		     (format-time-string "%Y-%m-%d %H:%M:%S %Z" exp)))))
 
-  remarkable-user-token)
+  remarkable--user-token)
 
 
 ;; ---------- API interactions ----------
 
 (defun remarkable--user-token-expired? ()
   "True if the user token has expired."
-  (time-less-p remarkable-user-token-expires
+  (time-less-p remarkable--user-token-expires
 	       (time-convert (current-time) 1)))
 
 
@@ -156,14 +151,14 @@ This returns a device registration token that persistently identifies
 the connection from this device to the ReMarkable cloud."
   (let (token)
     (let* ((body (list (cons "code" code)
-		       (cons "deviceDesc" remarkable-device)
-		       (cons "deviceID" remarkable-uuid))))
-      (request (concat remarkable-auth-host remarkable-device-token-url)
+		       (cons "deviceDesc" remarkable--device-description)
+		       (cons "deviceID" remarkable--device-uuid))))
+      (request (concat remarkable--auth-host remarkable--device-token-url)
 	:type "POST"
 	:parser #'buffer-string
 	:data (json-encode body)
 	:headers (list (cons "Content-Type" "application/json")
-		       (cons "User-Agent" remarkable-user-agent))
+		       (cons "User-Agent" remarkable--user-agent))
 	:sync t
 	:success (cl-function (lambda (&key data &allow-other-keys)
 				(setq token data)))
@@ -204,11 +199,11 @@ the device token as a bearer authorisation token. This returns
 a JWT user token which is then used as the bearer token for the
 rest of the API."
   (let (token)
-    (request (concat remarkable-auth-host remarkable-user-token-url)
+    (request (concat remarkable--auth-host remarkable--user-token-url)
       :type "POST"
       :parser #'buffer-string
-      :headers (list (cons "User-Agent" remarkable-user-agent)
-		     (cons "Authorization" (concat "Bearer " remarkable-device-token)))
+      :headers (list (cons "User-Agent" remarkable--user-agent)
+		     (cons "Authorization" (concat "Bearer " remarkable--device-token)))
       :sync t
       :success (cl-function (lambda (&key data &allow-other-keys)
 			      (setq token data)))

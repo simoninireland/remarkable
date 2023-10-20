@@ -31,11 +31,14 @@
 ;; ---------- Timestamps ----------
 
 (defun remarkable--timestamp (ts)
-  "onvert a ReMarkable timestamp to a Lisp timestamp.
+  "Convert a ReMarkable timestamp to a Lisp timestamp.
 
 The ReMarkable timestamp is measured in mulliseconds since the
 epoch. We convert this to the usual Lisp list format for timestamps."
-  (let ((s (/ (string-to-number ts) 1000)))
+  (let ((s (/ (if (stringp ts)
+		  (string-to-number ts)
+		ts)
+	      1000)))
     (decode-time s )))
 
 
@@ -64,7 +67,7 @@ We re-use `org-id-uuid' for UUID generation."
 
 
 (defun remarkable--create-temporary-directory-name (dir)
-  "Create a the name of a temporary directory DIR into which to build a document archive.
+  "Create a the name of a temporary directory DIR.
 
 Returns the full path to the directory."
   (f-join (remarkable--temporary-directory) dir))
@@ -92,15 +95,6 @@ read (and debug)."
 
 ;; sd: Should we code this up in Lisp to avoid the external dependency?
 ;; Has to be done on content, though, and might be too slow for large files.
-
-(defconst remarkable--sha256-shell-command "shasum -a 256 -"
-  "Shell command used to generate SHA256 hashes.
-
-This should be a filter taking the data to hash on its standard input
-and returning the hash on standard output. The actual hash will be
-extracted from this output using the regexp given in
-`remarkable--sha256-regexp'.")
-
 
 (defun remarkable--sha256-file (fn)
   "Return the SHA256 hash of FN.

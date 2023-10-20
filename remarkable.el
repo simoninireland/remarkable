@@ -49,7 +49,7 @@
 ;;(require remarkable-ssh)
 
 ;; org integration
-(require 'remarkable-org)
+;;(require 'remarkable-org)
 
 
 (provide 'remarkable)

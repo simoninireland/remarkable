@@ -128,12 +128,12 @@ is obtained."
 	  (cl-destructuring-bind (exp proto) (remarkable--parse-user-token ut)
 	    ;; check the protocol version is supported
 	    (if (not (equal proto remarkable-sync-version))
-		(error "Unsupported synchonisation protocol version: %s" proto)))
+		(error "Unsupported synchonisation protocol version: %s" proto))
 
 	    ;; set the expiry time
-	    (setq remarkable--user-token-expire exp)
+	    (setq remarkable-user-token-expires exp)
 	    (message "New user token acquired, expires %s"
-		     (format-time-string "%Y-%m-%d %H:%M:%S: exp"))))
+		     (format-time-string "%Y-%m-%d %H:%M:%S %Z" exp)))))
 
   remarkable-user-token)
 
@@ -213,10 +213,10 @@ rest of the API."
       :success (cl-function (lambda (&key data &allow-other-keys)
 			      (setq token data)))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error %s" error-thrown)))))
+			    (error "Error %s" error-thrown))))
 
-  ;; return the user token
-  token)
+    ;; return the user token
+    token))
 
 
 (provide 'remarkable-cloud-auth)

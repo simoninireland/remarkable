@@ -27,6 +27,7 @@
 
 ;;; Code:
 
+(require 'dash)
 (require 'request)
 (require 'json)
 (require 'cl)
@@ -62,10 +63,19 @@
   "Generation match header.")
 
 
+;; Constants
+
+(defconst remarkable-sync-version 1.5
+  "Supported version of the ReMarkable synchronisation protocol.")
+
+(defconst remarkable-index-schema-version 3
+  "Supported version of the ReMarkable index schema.")
+
+
 ;; ---------- State variables and cache ----------
 
 (defvar remarkable--root-index nil
-  "The index of the root.")
+  "Will be deleted after debugging...")
 
 (defvar remarkable--root-hierarchy nil
   "The collection and document hierarchy, extracted from the root index.")
@@ -79,80 +89,94 @@
 
 ;; ---------- Public API ----------
 
-(cl-defun remarkable-ls (&optional uuid)
-  "Return a document and folder structure for the given folder UUID.
+(defun remarkable--file-types-supported ()
+  "Return a list 0f the file types we support.
 
-If UUID is omitted, return the structure for the root folder."
-  (remarkable--get-root-index))
-
-
-(defun remarkable-get (fn ls)
-  "Get the file FN from folder LS.
-
-If FN names a folder that folder is returned.
-
-If FN names a document, the document ")
+This should be extracted from `remarkable--file-types-plist'."
+  (list "pdf" "epub" "rm" "lines"))
 
 
-(defun remarkable-put (doc fn ls)
-  "Store the file DOC as document FN in folder LS.")
+(defun remarkable-init ()
+  "Initialise the link to the ReMarkable cloud.
+
+This authenticates against the cloud (which requires a one-time
+token the first time), downloads the root index, and constructs a
+collection hierarchy for all the objects."
+  (interactive)
+  (unless (remarkable-authenticated?)
+    (call-interactively remarkable-authenticate))
+
+  (cl-destructuring-bind (hash gen index) (remarkable--get-root-index)
+    (setq remarkable--root-index index)	;; for debugging
+    (setq remarkable--hash hash
+	  remarkable--generation gen
+	  remarkable--root-hierarchy (remarkable--make-collection-hierarchy index)))
+
+  ;; avoid the huge return value that results by default
+  t)
 
 
-(defun remarkable-delete (fn ls)
-  "Delete FN from folder LS.
+(defun remarkable-put (fn &optional c)
+  "Store the file FN into collection C
 
-FN may name a document or a folder.")
+FN should be a local file name. C should be the UUID of a
+collection. If C is ommitted the document is put into the root
+collection.")
 
 
-(defun remarkable--make-folder (fn ls)
-  "Create a new folder FN in folder LS.
+(defun remarkable-delete (uuid)
+  "Delete the folder of collection with the given UUID.")
 
-Returns the new folder structure.")
+
+(defun remarkable-make-collection (fn &optional c)
+  "Create a new collection FN in collection C.
+
+If C is omitted the collection is created in the root collection.")
 
 
 ;; ---------- Root index API ----------
 
 (defun remarkable--get-root-index ()
-  "Retrieve and install the root index."
+  "Retrieve the root index.
+
+Returns a list containing the index hash, its generation, and a
+flat list of index entries with metadata.
+
+Use `remarkable--make-collection-hierarchy' to extract the
+hierarchical structure of the index entries"
   (let* ((folder (remarkable--get-blob-url))
 	 (hash-gen (remarkable--get-hash-generation folder))
 	 (index (remarkable--get-index (car hash-gen))))
-    (setq remarkable--hash (car hash-gen))
-    (setq remarkable--generation (cdr hash-gen))
     (remarkable--add-metadata index)
-    (setq remarkable--root-index index)
-    (setq remarkable--root-hierarchy (remarkable--make-collection-hierarchy index))))
-
-
-(defun remarkable--root-index-hash ()
-  "Return the hash of the root index.
-
-This is simply the sum of the individual objects' hashes."
-  (let ((hs (mapcar #'remarkable--entry-hash remarkable--root-index)))
-    (remarkable--sha256-sum hs)))
+    (list (car hash-gen) (cadr hash-gen) index)))
 
 
 (defun remarkable--create-root-index ()
   "Create a raw index to be uploaded.
 
 This traverses the `remarkable--root-hierarchy' to determine
-hashes and sub-files."
-  (cl-labels ((insert-index-line (e)
-	      "Insert an index line for entry E."
-	      (when e
-		(let ((hash (remarkable--entry-hash e))
-		      (fn (remarkable--entry-uuid e))
-		      (length (remarkable--entry-length e))
-		      (subfiles (remarkable--entry-subfiles e))
-		      (contents (remarkable--entry-contents e)))
-		  (insert (format "%s:80000000:%s:%s:%s\n" hash fn subfiles length))
-		  (if contents
-		      (mapc #'insert-index-line contents))))))
+hashes and sub-files.
 
-    (with-temp-buffer
-      (insert (format "%s\n" remarkable-index-schema-version))   ;; schema version
-      (mapc #'insert-index-line remarkable--root-hierarchy)      ;; entries
-      (buffer-string))))
+Return a list consisting of the index and the hash."
+  (cl-labels ((insert-index-line (e)
+		"Insert an index line for entry E."
+		(when e
+		  (let ((hash (remarkable--entry-hash e))
+			(fn (remarkable--entry-uuid e))
+			(length (remarkable--entry-length e))
+			(subfiles (remarkable--entry-subfiles e))
+			(contents (remarkable--entry-contents e)))
+		    (insert (format "%s:80000000:%s:%s:%s\n" hash fn subfiles length))
+		    (if contents
+			(mapc #'insert-index-line contents))))))
+
+    (let* ((index (with-temp-buffer
+		    (insert (format "%s\n" remarkable-index-schema-version)) ;; schema version
+		    (mapc #'insert-index-line remarkable--root-hierarchy)    ;; entries
+		    (buffer-string)))
+	   (hs (mapcar #'remarkable--entry-hash remarkable--root-hierarchy))
+	   (hash (remarkable--sha256-sum hs)))
+      (list index hash))))
 
 
 ;; ---------- Index handling ----------
@@ -243,22 +267,23 @@ This function is essentially the dual of `remarkable--parse-index'."
 
 ;; ---------- Download API interactions ----------
 
-(cl-defun remarkable--get-blob-url (&optional uuid)
-  "Get the access URL to a document or folder identified by UUID.
+(cl-defun remarkable--get-blob-url (&optional hash)
+  "Get the access URL to a document or folder identified by HASH.
 
-If UUID is omitted, the URL to the root folder is retrieved.
+If HASH is omitted, the URL to the root folder is retrieved.
 
 This function sends a \"POST\" method to the download endpoint
 (`remarkable-download-url' on `remarkable-sync-host') passing a
 JSON payload specifying the \"GET\" an item identified by a
-hash. (The hash of the root folder is \"root\".) This returns
-a JSON result including a field 'url that holds the blob URL
-of the item.
+hash. (The hash of the root folder is \"root\".) This returns a
+JSON result including a field 'url' that holds the download URL
+for the blob. A \"GET\" request against this URL will retrieve
+its contents
 
 (Note that this is a \"POST\" request to the API that includes
 a \"GET\" request in its payload.)"
   (let ((body (list (cons "http_method" "GET")
-		    (cons "relative_path" (or uuid "root"))))
+		    (cons "relative_path" (or hash "root"))))
 	url)
     (request (concat remarkable-sync-host remarkable-download-url)
       :type "POST"
@@ -278,10 +303,11 @@ a \"GET\" request in its payload.)"
 (defun remarkable--get-hash-generation (url)
   "Retrieve the hash and generation from URL.
 
-The URL should be a blob URL for a folder. This is dereferenced with
-a \"GET\" request and returns a hash for the index document of the
-folder and a generation hash, which are returned as a list."
-  (let (index gen)
+The URL should be a blob URL for the root collection. This is
+dereferenced with a \"GET\" request and returns a hash for the
+index document of the folder and a generation hash, which are
+returned as a list."
+  (let (hash gen)
     (request url
       :type "GET"
       :parser #'buffer-string
@@ -290,10 +316,10 @@ folder and a generation hash, which are returned as a list."
       :sync t
       :success (cl-function (lambda (&key response data &allow-other-keys)
 			      (setq gen (request-response-header response remarkable--generation-header))
-			      (setq index data)))
+			      (setq hash data)))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
 			    (error "Error getting document hash and generation: %s" error-thrown))))
-    (list index gen)))
+    (list hash gen)))
 
 
 (defun remarkable--get-blob (hash)
@@ -317,6 +343,62 @@ URL, and dereferences this to get the blob itself."
     blob))
 
 
+(defun remarkable--get-content-hash (hash ext)
+  "Get the hash of the raw content associated with HASH in format EXT.
+
+We first acquire the index associated with HASH, and check for a
+document will include a \".EXT\" file whose hash we return."
+  (if-let* ((index (remarkable--get-index hash))
+	    (ce (-first (lambda (e)
+			   (if-let ((cfn (remarkable--entry-uuid e)))
+			       (equal (f-ext cfn) ext)))
+			 index)))
+      (remarkable--entry-hash ce)))
+
+
+(defun remarkable--get-content-types (hash)
+  "Return a list of the content types available for the document HASH.
+
+The types are a list of extensions, a sub-set of those returned by
+`remarkable--file-types-supported' for which we have handlers."
+  (if-let ((index (remarkable--get-index hash))
+	   (exts (remarkable--file-types-supported)))
+      (mapcan (lambda (ext)
+		(if (-first (lambda (e)
+			      (if-let ((cfn (remarkable--entry-uuid e)))
+				  (equal (f-ext cfn) ext)))
+			    index)
+		    (list ext)))
+		 exts)))
+
+
+(defun remarkable--get-content (hash fn)
+  "Get the content associated with the document HASH into file FN.
+
+The extension of FN will define to the type of content wanted.
+
+Returns nil if there is no associated content of the correct
+type."
+  (if-let* ((ext (f-ext fn))
+	    (contenthash (remarkable--get-content-hash hash ext)))
+      (progn
+	(with-temp-file fn
+	  (insert (remarkable--get-blob contenthash)))
+	t)))
+
+
+(defun remarkable--download-document (uuid fn)
+  "Download the content of the document with the given UUID into FN."
+  (if-let* ((e (remarkable--find-entry uuid remarkable--root-hierarchy))
+	    (hash (remarkable--entry-hash e))
+	    (success (remarkable--get-content hash fn)))
+      ;; file successfully downloaded
+      (message "Downloaded \"%s\" into %s" (remarkable--entry-name e) fn)
+
+    ;; failed for some reason
+    (error "Failed to download content")))
+
+
 ;; ---------- Object-level metadata management ----------
 
 (defun remarkable--add-metadata (ls)
@@ -325,36 +407,38 @@ URL, and dereferences this to get the blob itself."
 Each entry in LS is queried for metadata using `remarkable--get-metadata'.
 If found, the metadata is added as a plist associated with
 the ':metadata' tag."
-  (cl-mapc (lambda (e)
-	     (if-let* ((hash (plist-get e :hash))
-		       (metadata (remarkable--get-metadata hash)))
-		 (plist-put e :metadata metadata)))
-	   ls))
+  (mapc (lambda (e)
+	  (if-let* ((hash (plist-get e :hash))
+		    (metadata (remarkable--get-metadata hash)))
+	      (plist-put e :metadata metadata)))
+	ls))
+
+
+(defun remarkable--get-metadata-hash (hash)
+  "Get the hash of the metadata associated with HASH.
+
+We first acquire the index associated with HASH, which for a document
+will include a \".metadata\" file whose hash we return."
+  (if-let* ((index (remarkable--get-index hash))
+	    (meta (-first (lambda (e)
+			    (if-let ((mfn (remarkable--entry-uuid e)))
+				(equal (f-ext mfn) "metadata")))
+			 index)))
+      (remarkable--entry-hash meta)))
 
 
 (defun remarkable--get-metadata (hash)
-  "Get the metadata associated with the document HASH.
+  "Get the metadata plist associated with the document HASH.
 
-We first acquire the index associated with HASH, which for a document
-will include a \".metadata\" file. Downloading this file retrieves
-the metadata for the blob."
-  (cl-flet ((metadata-hash (index)
-	      "Return the hash of the metadata blob from INDEX, or nil"
-	      (let ((meta (-filter (lambda (e)
-				     (let ((fn (plist-get e :uuid)))
-				       (and (not (null fn))
-					    (equal (f-ext fn) "metadata"))))
-				   index)))
-		(if (not (null meta))
-		    (plist-get (car meta) :hash)))))
-    (if-let* ((index (remarkable--get-index hash))
-	      (metahash (metadata-hash index))
-	      (raw-metadata (remarkable--get-blob metahash))
-	      (metadata (json-parse-string raw-metadata
-					   :object-type 'plist)))
-	;; patch the timestamp into a standard format
-	(plist-put metadata :lastModified
-		   (remarkable--timestamp (plist-get metadata :lastModified))))))
+Return nil if there is no associated metadata, which typically means that
+HASH identifies a collection, not a document."
+  (if-let* ((metahash (remarkable--get-metadata-hash hash))
+	    (raw-metadata (remarkable--get-blob metahash))
+	    (metadata (json-parse-string raw-metadata
+					 :object-type 'plist)))
+      ;; patch the timestamp into a standard format
+      (plist-put metadata :lastModified
+		 (remarkable--timestamp (plist-get metadata :lastModified)))))
 
 
 (defun remarkable--make-collection-hierarchy (es)
@@ -363,7 +447,11 @@ the metadata for the blob."
 This takes a entry list constructed from a flat index of the root
 collection and converts it into a nested entry structure. Each collection
 and sub-collection has a \":contents\" property that contains the documents
-and collections within it."
+and collections within it.
+
+We retain /all/ entries, including deleted ones. Other functions
+can use `remarkable--entry-is-deleted?' to elide deleted entries
+if required/"
 
   ;; The problem with this operation is that the hierarchy is only encoded
   ;; into object-level metadata, and the entries in an index are not
@@ -379,6 +467,10 @@ and collections within it."
   ;; would give rise to an infinite recursion. This structure is built
   ;; and maintained client-side, so we check the the number of deferred
   ;; entries goes down with every sweep through the index to detect problems.
+  ;;
+  ;; Its possible this approach will fail for very large document stores
+  ;; because of ELisp's restrictions on the depth of recursive calls. It
+  ;; ight be worth re-writing it in iterative form.
 
   (cl-labels ((copy-entry (e)
 		"Create a copy of E."
@@ -400,8 +492,9 @@ and collections within it."
 			;; at every recursive call: we only change ndeferred when
 			;; we start a sweep the deferred list, and check that this
 			;; number goes down at each such recursion
-			(if (equal (length deferred) ndeferred)
-			    ;; the number of deferred entries is the same as we started with
+			(if (and (> ndeferred 0)
+				 (>= (length deferred) ndeferred))
+			    ;; number of deferred items hasn't reduced
 			    (error "Problem with the entry hierarchy")
 
 			  ;; otherwise carry on processing, passing in the
@@ -414,45 +507,58 @@ and collections within it."
 		  ;; process the next entry
 		  (let ((e (copy-entry (car notdone)))
 			(rest (cdr notdone)))
-		    (if (remarkable--is-deleted? e)
-			;; deleted entry, elide
-			(fold-entries rest done deferred ndeferred)
+		    (if (or (remarkable--entry-is-deleted? e)
+			    (remarkable--entry-is-in-root-collection? e))
+			;; entry is in root collection, move to done
+			;; deleted entries are treated as being in root
+			(progn
+			  (fold-entries rest (append done (list e)) deferred ndeferred))
 
-		      (if (remarkable--object-is-in-root-collection? e)
-			  ;; entry is in root collection, move to done
-			  (fold-entries rest (append done (list e)) deferred ndeferred)
+		      ;; entry is in some other collection, search for it
+		      (let ((parent (remarkable--entry-parent e)))
+			;; look for parent in done
+			(if-let ((p (find-collection parent done)))
+			    ;; parent is in done, move to there and continue
+			    (progn
+			      (remarkable--add-entry-to-contents e p)
+			      (fold-entries rest done deferred ndeferred))
 
-			;; entry is in a collection, search for it
-			(let ((parent (remarkable--object-parent e)))
-			  ;; look for parent in done
-			  (if-let ((p (find-collection parent done)))
-			      ;; parent is in done, move to there and continue
-			      (progn
-				(remarkable--add-entry-to-contents e p)
-				(fold-entries rest done deferred ndeferred))
-
-			    ;; parent not yet processed, defer
-			    (fold-entries rest done (append deferred (list e)) ndeferred)))))))))
+			  ;; parent not yet processed, defer
+			  (fold-entries rest done (append deferred (list e)) ndeferred))))))))
 
     (fold-entries es nil nil 0)))
 
 
-(defun remarkable--find-entry (uuid es)
-  "Find the entry with the given UUID in (possibly nested) structure ES."
+(defun remarkable--find-entry-by-key-value (key value es)
+  "Find the entry with the given VALUE in field KEY in (possibly nested) structure ES.
+
+This looks only in the index entries, not in the metadata."
   (cl-block FIND
     (cl-labels ((check-entry (e)
-		  "Check if E has the given UUID."
-		  (if (equal (remarkable--entry-uuid e) uuid)
+		  "Check if E has the given key value"
+		  (if (equal (plist-get e key) value)
 		      (cl-return-from FIND e)
 		    (check-contents e)))
+
 		(check-contents (e)
 		  "Check the contents of E."
 		  (mapc #'check-entry
 			(remarkable--entry-contents e))))
+
       (mapc #'check-entry es)
 
       ;; if we get here, we failed to find the entry
       nil)))
+
+
+(defun remarkable--find-entry (uuid es)
+  "Find the entry with the given UUID in (possibly nested) structure ES."
+  (remarkable--find-entry-by-key-value :uuid uuid es))
+
+
+(defun remarkable--find-entry-by-hash (hash es)
+   "Find the entry with the given HASH in (possibly nested) structure ES"
+   (remarkable--find-entry-by-key-value :hash hash es))
 
 
 (defun remarkable--add-entry-to-contents (e f)
@@ -478,8 +584,8 @@ directly to root collection or the contents of its parent collection."
       ;; add entry to es
       (append es (list e))
 
-    ;; add entry to contents unless it's in the root collection
-    (let ((p (remarkable--find-entry (remarkable--entry-parent e))))
+    ;; add entry to parent's contents
+    (let ((p (remarkable--find-entry (remarkable--entry-parent e) es)))
       (remarkable--add-entry-to-contents e p)
       es)))
 
@@ -512,7 +618,10 @@ the raw content.
 		"Pretty-print entry E and indentation level N."
 		(let ((print-e (concat (make-indent indent)
 				       (remarkable--entry-name e)
-				       (format " (%s)" (remarkable--entry-uuid e))))
+				       (format " (%s)"
+					       (if (remarkable--entry-is-deleted? e)
+						   "deleted"
+						 (remarkable--entry-uuid e)))))
 		      (print-es (mapcar (lambda (e) (pp e (+ indent 3))) (remarkable--entry-contents e))))
 		  (apply #'concat (format "%s\n" print-e) print-es))))
 
@@ -555,7 +664,7 @@ the raw content.
 
 A parent of \"\" indicates the E is in the root collection. A
 parent of \"trash\" indicates a deleted file (see
-`remarkable--is-deleted?'."
+`remarkable--entry-is-deleted?'."
   (remarkable--entry-metadata-get e :parent))
 
 (defun remarkable--entry-is-in-root-collection? (e)
@@ -583,12 +692,6 @@ collection if its parent is \"\"."
   "Check whether E has been deleted."
   (equal (remarkable--entry-metadata-get e :parent) "trash"))
 
-(defun remarkable--entry-is-not-deleted? (e)
-  "Check whether E has not been deleted.
-
-This is simply the negation of `remarkable--entry-is-deleted?'."
-  (not (remarkable--entry-is-deleted? e)))
-
 (defun remarkable--entry-contents (e)
   "Return the list of sub-entries of E."
   (plist-get e :contents))
@@ -602,7 +705,7 @@ This is simply the negation of `remarkable--entry-is-deleted?'."
 This relies on the name being meaningful in some sense. We
 strip the extension and replace underscores with spaces.
 (Should probably capitalise as well.)"
-  (let* ((stem (file-name-sans-extension fn))
+  (let* ((stem (file-name-sans-extension (f-filename fn)))
 	 (spaced (string-replace "_" " " stem)))
     spaced))
 
@@ -686,7 +789,7 @@ an upload URL for that hash using `remarkable--get-blob-upload-url',
 and then making a \"PUT\" request against this URL to upload DATA."
    (unless hash
      (setq hash (remarkable--sha256-data data)))
-   (let* ( (url-max (remarkable--get-blob-upload-url hash))
+   (let* ((url-max (remarkable--get-blob-upload-url hash))
 	  (url (car url-max))
 	  (maxUpload (cadr url-max)))
      (request url
@@ -720,18 +823,18 @@ This uses `remarkable--put-blob-data' to send the file."
 (defun remarkable--get-root-index-upload-url (hash gen)
   "Get the upload URL and maximum upload size for the root index.
 
-HASH is the hash of the new index for generation GEN.
+HASH is the hash of the new index for current generation GEN.
 
 This function sends a \"POST\" method to the download endpoint
 (`remarkable-upload-url' on `remarkable-sync-host') passing a
-JSON payload specifying the \"PUT\" an item identified by a
-hash.
+JSON payload specifying the \"PUT\" on the root with the new
+index hash and current generation.
 
 (Note that this is a \"POST\" request to the API that includes
 a \"PUT\" request in its payload.)"
   (let ((body (list (cons "http_method" "PUT")
 		    (cons "relative_path" "root")
-		    (cons "root_schema" root)
+		    (cons "root_schema" hash)
 		    (cons "generation" gen)))
 	url maxUpload)
     (request (concat remarkable-sync-host remarkable-upload-url)
@@ -746,16 +849,16 @@ a \"PUT\" request in its payload.)"
 			      (setq url (cdr (assoc 'url data)))
 			      (setq maxUpload (cdr (assoc 'maxuploadsize_bytes data)))))
       :error (cl-function (lambda (&key error-thrown &allow-other-keys)
-			    (error "Error in getting root index upload URL: %s" error-thrown))))
+			    (error "Error in getting root index upload URL for generation %s: %s" gen error-thrown))))
     (list url maxUpload)))
 
 
 (defun remarkable--put-root-index (hash gen)
   "Write a new root index for HASH and GEN, returning a new generation."
-  (let* ( (url-max (remarkable--get-root-index-upload-url hash gan))
-	  (url (car url-max))
-	  (maxUpload (cadr url-max))
-	  newgen)
+  (let* ((url-max (remarkable--get-root-index-upload-url hash gen))
+	 (url (car url-max))
+	 (maxUpload (cadr url-max))
+	 newgen)
      (request url
        :type "PUT"
        :data hash
@@ -799,7 +902,7 @@ This performs a \"POST\" request against the completion endpoint
 Supported file type extension are given in `remarkable-file-types'."
   ;; Change to use custom options
   (let ((ext (f-ext fn)))
-    (member ext remarkable-file-types)))
+    (member ext (remarkable-file-types-supported))))
 
 
 (cl-defun remarkable--upload-document (fn &optional (parent "root"))
@@ -830,9 +933,10 @@ If PARENT is omitted the document goes to the root collection."
 	    (insert pagedata))
 
 	  ;; upload the component files
-	  ;; (mapc #'remarkable--put-blob (list metadata-fn
-	  ;;				     metacontent-fn
-	  ;;				     fn))
+	  (mapc #'remarkable--put-blob (list metadata-fn
+					     metacontent-fn
+					     pagedata-fn
+					     fn))
 
 	  ;; upload the index for the new document
 	  (let ((hash (remarkable--sha256-files (list metadata-fn
@@ -843,28 +947,32 @@ If PARENT is omitted the document goes to the root collection."
 						       metacontent-fn
 						       pagedata-fn
 						       (cons fn content-fn)))))
-	    ;;(remarkable--put-blob-data index hash)
-	    (princ (fprmat "index:\n%s`\"" index))
-	    (princ (format "hash: %s\n" hash)))
+	    (remarkable--put-blob-data index hash))
 
 	  ;; add the new document to the hierarchy
-	  (let (e (remarkable--create-entry fn
-					    uuid
-					    metadata
-					    (list metacontent-fn pagedata-fn)))
-	    (remarkable--add-entry e remarkable--root-hierarchy)
-	    (princ (format "entry:\n%s\n" e)))
+	  (let ((e (remarkable--create-entry fn
+					     uuid
+					     metadata
+					     (list metacontent-fn pagedata-fn))))
+	    (remarkable--add-entry e remarkable--root-hierarchy))
 
 	  ;; update the root index
-	  (let* ((roothash (remarkable--hash-root-index))
-		 (newgen (remarkable--put-root-index hash remarkable--generation)))
-	    (setq remarkable--hash roothash)
-	    (setq remarkable--generation newgen))
+	  (cl-destructuring-bind (index roothash) (remarkable--create-root-index)
+	    ;; upload the index
+	    (remarkable--put-blob-data index roothash)
+
+	    ;; upload the new root index hash
+	    (let ((newgen (remarkable--put-root-index roothash
+						      remarkable--generation)))
+	      ;; update our state to reflect the new root index and generation
+	      (setq remarkable--hash roothash
+		    remarkable--generation newgen)))
 
 	  ;; finish the upload
-	  ;;(remarkable--upload-complete remarkable--generation)
-	  (princ "done\n")
-	  )
+	  (remarkable--upload-complete remarkable--generation)
+
+	  ;; return the UUID of the newly-uploaded document
+	  uuid)
 
       ;; clean-up temporary storage
       (if (f-exists? tmp)

@@ -49,7 +49,7 @@
 
 ;; ---------- Cache ----------
 
-(defcustom remarkable--cache-file-name (f-join user-emacs-directory "remarkable-cache.el")
+(defcustom remarkable--cache-file-name (f-join user-emacs-directory "rm-cache.el")
   "File to store the document cache."
   :group 'Remarkable
   :type 'file)
@@ -73,7 +73,7 @@ but apparently has no significance."
 
 ;; ---------- SHA256 hashes ----------
 
-(defcustom remarkable--sha256-shell-comment "shasum -a 256 -"
+(defcustom remarkable--sha256-shell-command "shasum -a 256 -"
   "Shell command used to generate SHA256 hashes.
 
 This should be a filter taking the data to hash on its standard input
@@ -94,7 +94,7 @@ extracted from this output using the regexp given in
 
 ;; ---------- File types ----------
 
-(defcustom remarkable--file-types-plist ""
+(defcustom remarkable--file-types-plist '("pdf" nil)
   "Shell command used to generate SHA256 hashes.
 
 This should be a filter taking the data to hash on its standard input
@@ -102,7 +102,7 @@ and returning the hash on standard output. The actual hash will be
 extracted from this output using the regexp given in
 `remarkable--sha256-regexp'."
   :group 'Remarkable
-  :type '(alist :key-type string :value-type function)
+  :type '(plist :key-type string :value-type function)
   :options '("pdf"))
 
 

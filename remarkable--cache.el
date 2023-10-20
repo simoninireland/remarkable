@@ -1,4 +1,4 @@
-;;; remarkable-cache.el --- Document cache -*- lexical-binding: t -*-
+;;; remarkable-cache.el --- Cache management -*- lexical-binding: t -*-
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; Loading and saving the document cache.
+;; Loading and saving the collection cache.
 
 ;;; Code:
 
@@ -33,26 +33,34 @@
 
 This saves the root hash, generation, and entry hierarchy as Lisp
 data structures."
-  (save-excursion
-    (find-file fn)
+  (with-temp-file fn
+    (prin1 `(:hash ,remarkable--hash
+	     :generation ,remarkable--generation
+	     :hierarchy ',remarkable--root-hierarchy)
+	   (current-buffer))))
 
-    ;; delete any contents
-    (delete-region (point-min) (point-max))
-
-    ;; insert the structures
-    ;; sd: pretty-printing isn't needed once everything is working
-    (cl-prettyprint `(setq remarkable--hash ,remarkable--hash))
-    (cl-prettyprint `(setq remarkable--generation ,remarkable--generation))
-    (cl-prettyprint `(setq remarkable--root-hierarchy ',remarkable--root-hierarchy))
-
-    (save-buffer)
-    (kill-buffer)))
 
 (defun remarkable--load-cache (fn)
   "Load the document cache from FN.
 
-This executes the file, which is clearly a bad idea."
-  (load fn))
+We evaluate the data structure as quoted to avoid executing rogue
+code that might be introduced the cache file."
+  (let* ((raw-config (with-temp-buffer
+		       (insert-file-contents fn)
+		       (buffer-string)))
+	 (config (car (read-from-string raw-config))))
+    (if-let ((hash (plist-get config :hash)))
+	(setq remarkable--hash hash)
+      (error "Corrupted cache (no hash)"))
+    (if-let ((gen (plist-get config :generation)))
+	(setq remarkable--generation gen)
+      (error "Corrupted cache (no generation)"))
+    (if-let ((hier (plist-get config :hierarchy)))
+	(setq remarkable--root-hierarchy hier)
+      (error "Corrupted cache (no collection hierarchy)"))
+
+    ;; avoid returning the hierarchy
+    t))
 
 
 (provide 'remarkable-cache)

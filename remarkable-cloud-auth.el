@@ -59,6 +59,14 @@
 
 ;; ---------- Local state ----------
 
+;; These values are all cached: see `remarkable-save-cache' and `remarkable-load-cache'.
+
+(defvar remarkable--device-uuid nil
+  "UUID for this client with the ReMarkable cloud..")
+
+(defvar remarkable--device-token nil
+  "Device registration token for this client with the ReMarkable cloud.")
+
 (defvar remarkable--user-token nil
   "The ReMarkable cloud user token for this client.
 
@@ -137,8 +145,9 @@ is obtained."
 
 (defun remarkable--user-token-expired? ()
   "True if the user token has expired."
-  (time-less-p remarkable--user-token-expires
-	       (time-convert (current-time) 1)))
+  (or (null remarkable--user-token-expires)
+      (time-less-p remarkable--user-token-expires
+		   (time-convert (current-time) 1))))
 
 
 (defun remarkable--register-device (code)

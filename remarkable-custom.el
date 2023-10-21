@@ -34,19 +34,6 @@
   :version 1)
 
 
-;; ---------- Device registration and authentication tokens ----------
-
-(defcustom remarkable--device-uuid nil
-  "The ReMarkable cloud UUID for this client."
-  :group 'Remarkable
-  :type 'string)
-
-(defcustom remarkable--device-token nil
-  "The ReMarkable cloud device registration token for this client."
-  :group 'Remarkable
-  :type 'string)
-
-
 ;; ---------- Cache ----------
 
 (defcustom remarkable--cache-file-name (f-join user-emacs-directory "rm-cache.el")

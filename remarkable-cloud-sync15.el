@@ -73,6 +73,8 @@
 
 ;; ---------- State variables and cache ----------
 
+;; These values are all cached: see `remarkable-save-cache' and `remarkable-load-cache'.
+
 (defvar remarkable--root-hierarchy nil
   "The collection and document hierarchy, extracted from the root index.")
 
@@ -399,9 +401,12 @@ Each entry in ES is queried for metadata using `remarkable--get-metadata'.
 If found, the metadata is added as a plist associated with
 the ':metadata' tag."
   (mapc (lambda (e)
-	  (if-let* ((hash (remarkable-entry-hash e))
-		    (metadata (remarkable--get-metadata hash)))
-	      (plist-put e :metadata metadata)))
+	  (princ (format "%s\n" e))
+	  (condition-case nil
+	      (if-let* ((hash (remarkable-entry-hash e))
+			(metadata (remarkable--get-metadata hash)))
+		  (plist-put e :metadata metadata))
+	    (error nil)))
 	es))
 
 
@@ -495,10 +500,12 @@ if required/"
 		  ;; process the next entry
 		  (let ((e (copy-entry (car notdone)))
 			(rest (cdr notdone)))
-		    (if (or (remarkable-entry-is-deleted? e)
+		    (if (or (remarkable-entry-has-no-metadata? e)
+			    (remarkable-entry-is-deleted? e)
 			    (remarkable-entry-is-in-root-collection? e))
 			;; entry is in root collection, move to done
-			;; deleted entries are treated as being in root
+			;; deleted entries and those without metadata
+			;; are treated as being in root
 			(progn
 			  (fold-entries rest (append done (list e)) deferred ndeferred))
 
@@ -615,9 +622,12 @@ alongside the metadata and the raw content.
 		(let ((print-e (concat (make-indent indent)
 				       (remarkable-entry-name e)
 				       (format " (%s)"
-					       (if (remarkable-entry-is-deleted? e)
-						   "deleted"
-						 (remarkable-entry-uuid e)))))
+					       (cond ((remarkable-entry-has-no-metadata? e)
+						      "no metdata")
+						     ((remarkable-entry-is-deleted? e)
+						      "deleted")
+						     (t
+						      (remarkable-entry-uuid e))))))
 		      (print-es (mapcar (lambda (e) (pp e (+ indent 3)))
 					(remarkable-entry-contents e))))
 		  (apply #'concat (format "%s\n" print-e) print-es))))
@@ -632,9 +642,16 @@ alongside the metadata and the raw content.
   "Return the object-level metedata associated with E."
   (plist-get e :metadata))
 
+(defun remarkable-entry-has-no-metadata? (e)
+  "Test whether E has metedata.
+
+All objects /should/ have metadata, but there seem to be some
+circumstances where they don't."
+  (null (remarkable-entry-metadata e)))
+
 (defun remarkable-entry-metadata-get (e k)
   "Return the metadata field K associated with E."
-  (plist-get (remarkable--entry-metadata e) k))
+  (plist-get (remarkable-entry-metadata e) k))
 
 (defun remarkable-entry-uuid (e)
   "Return the UUID associated with E."

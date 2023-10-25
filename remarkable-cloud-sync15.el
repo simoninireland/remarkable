@@ -30,6 +30,7 @@
 (require 'dash)
 (require 'request)
 (require 'json)
+(require 'cl-lib)
 
 
 ;; ---------- Web interface ----------
@@ -85,6 +86,9 @@
   "Hash of files retrieved.")
 
 
+;; ---------- Hooks ----------
+
+
 ;; ---------- Public API ----------
 
 (defun remarkable-init ()
@@ -96,14 +100,21 @@ collection hierarchy for all the objects."
   (interactive)
   (unless (remarkable-authenticated?)
     (call-interactively #'remarkable-authenticate))
+  (remarkable-load-index))
 
+
+(defun remarkable-load-index ()
+  "Load the index from the ReMarkable cloud.
+
+The index is used to build the local view of the collection and
+document hierarchy."
   (cl-destructuring-bind (hash gen index) (remarkable--get-root-index)
     (setq remarkable--hash hash
 	  remarkable--generation gen
-	  remarkable--root-hierarchy (remarkable--make-collection-hierarchy index)))
+	  remarkable--root-hierarchy (remarkable--make-collection-hierarchy index))
 
-  ;; avoid the huge return value that results by default
-  t)
+    ;; avoid returning a huge value
+    t))
 
 
 (defun remarkable-put (fn &optional c)
@@ -133,11 +144,17 @@ Returns a list containing the index hash, its generation, and a
 flat list of index entries with metadata.
 
 Use `remarkable--make-collection-hierarchy' to extract the
-hierarchical structure of the index entries"
+hierarchical structure of the index entries."
+  (cl-destructuring-bind (hash gen index) (remarkable--get-bare-root-index)
+    (remarkable--add-metadata index)
+    (list hash gen index)))
+
+
+(defun remarkable--get-bare-root-index ()
+  "Retrieve the root index \"bare\", without metadata."
   (let* ((root (remarkable--get-blob-url)))
     (cl-destructuring-bind (hash gen) (remarkable--get-hash-generation root)
       (let ((index (remarkable--get-index hash)))
-	(remarkable--add-metadata index)
 	(list hash gen index)))))
 
 
@@ -555,6 +572,7 @@ This looks only in the index entries, not in the metadata."
    "Find the entry with the given HASH in (possibly nested) structure ES"
    (remarkable--find-entry-by-key-value :hash hash es))
 
+
 (defun remarkable--entry-hashes (es)
   "Extract all the hashes from the (possibly nested) entries in ES."
   (cl-labels ((entry-hashes (e)
@@ -564,6 +582,35 @@ This looks only in the index entries, not in the metadata."
 		  (cons h chs))))
 
     (mapcan #'entry-hashes es)))
+
+
+(defun remarkable--find-entry-n (n es)
+  "Return entry E from the (possibly nested) entries in ES.
+
+This performs a traversal of the entry hierarchy, visiting an
+entry and then all its contents recursively. N starts from 1.
+Deleted entries are skipped."
+  (cl-block FOUND
+    (cl-labels ((find-entry (m hier)
+		  "Return entry N from HIER."
+		  (if (null hier)
+		      (1- m)
+		    (let ((e (car hier)))
+		      (cond ((remarkable-entry-is-deleted? e)
+			     (find-entry m (cdr hier)))
+			    ((equal m n)
+			     (cl-return-from FOUND e))
+			    (t
+			     (let ((contents (remarkable-entry-contents e)))
+			       (if contents
+				   (setq m (find-entry (1+ m) contents))))
+			     (find-entry (1+ m) (cdr hier))))))))
+
+      (find-entry 1 es)
+
+      ;; if we get here, we didn't find the entry
+      (error "No entry %s" n))))
+
 
 (defun remarkable--add-entry-to-contents (e f)
   "Add E to the contents of F.
@@ -577,6 +624,17 @@ if one does ot already exist."
 
       ;; no current contents, create a singleton
       (plist-put f :contents (list e)))))
+
+
+(defun remarkable--delete-entry-from-contents (e f)
+  "Remove entry E from the contents of entry F."
+  (let ((cs (plist-get f :contents)))
+    (if cs
+	;; remove from the list
+	(plist-put f :contents (-remove-item e cs))
+
+      ;; can't remove from an entry without contents
+      (error "Entry %s has no contents to remove from" (remarkable-entry-uuid f)))))
 
 
 (defun remarkable--add-entry (e es)
@@ -594,6 +652,17 @@ directly to the root collection or the contents of its parent collection."
       es)))
 
 
+(defun remarkable--delete-entry (e es)
+  "Remove the entry E from ES."
+  (if (remarkable-entry-is-in-root-collection? e)
+      ;; remove directly
+      (-remove-item e es)
+
+    ;; remove from parent :contents
+    (let ((p (remarkable--find-entry (remarkable-entry-parent e) es)))
+      (remarkable--delete-entry-from-contents e p)
+      es)))
+
 (defun remarkable--create-entry (fn uuid hash metadata extrafiles)
   "Create an entry for FN.
 
@@ -606,7 +675,7 @@ alongside the metadata and the raw content.
     (list :hash hash
 	  :type "DocumentType"
 	  :uuid uuid
-	  :subfiles (+ 2 (length extrafiles))    ;; content + metadata + others
+	  :subfiles (+ 2 (length extrafiles)) ;; content + metadata + others
 	  :length len
 	  :metadata metadata)))
 
@@ -623,7 +692,9 @@ alongside the metadata and the raw content.
 				       (remarkable-entry-name e)
 				       (format " (%s)"
 					       (cond ((remarkable-entry-has-no-metadata? e)
-						      "no metdata")
+						      (format  "no metdata: %s %s"
+							       (remarkable-entry-uuid e)
+							       (remarkable-entry-subfiles e)))
 						     ((remarkable-entry-is-deleted? e)
 						      "deleted")
 						     (t
@@ -727,15 +798,14 @@ strip the extension and replace underscores with spaces.
 
 (defun remarkable--create-metadata-plist (fn parent)
   "Create a metadata plist for FN going into PARENT."
-  (list :visibleName (remarkable--filename-to-name fn)
-	:version 0
-	:type "DocumentType"
-	:parent parent
-	:synced t
-	:pinned :false
-	:modified :false
-	:deleted :false
-	:lastModified (remarkable--lisp-timestamp (current-time))))
+  (let ((now (remarkable--lisp-timestamp (current-time))))
+    (list :visibleName (remarkable--filename-to-name fn)
+	  :type "DocumentType"
+	  :parent parent
+	  :pinned :json-false
+	  :lastModified now
+	  :lastOpened "0"
+	  :lastOpenedPage 0)))
 
 
 (defun remarkable--create-content-plist (ext)
@@ -757,16 +827,16 @@ strip the extension and replace underscores with spaces.
 			 :m31 0
 			 :m32 0
 			 :m33 1)
-	:pages nil
-	:pageTage: nil
+	:pages []
+	:pageTags: []
 	:extraMetatata: (list :lastPen: "Finelinerv2"
 			      :lastTool: "Finelinerv2"
-			      :lastFinelinerv2Size: 1)))
+			      :lastFinelinerv2Size: "1")))
 
 
 (defun remarkable--create-pagedata (fn ext)
     "Create the page data for FN with type EXT"
-    "Blank\n")
+    "\n")
 
 
 ;; ---------- Upload API interactions ----------
@@ -985,15 +1055,12 @@ If PARENT is omitted the document goes to the root collection."
 
 	      ;; update the root index
 	      (cl-destructuring-bind (rootindex roothash) (remarkable--create-root-index hier)
-		(princ (format "old %s\nnew %s\n" remarkable--hash roothash))
 		;; upload the index to its new hash
 		(remarkable--put-blob-data rootindex roothash)
-		(princ "done\n")
 
 		;; upload the new root index hash
 		(let ((newgen (remarkable--put-root-index roothash
 							  remarkable--generation)))
-		  (princ (format "oldgen %s\nnewgen %s\n" remarkable--generation newgen))
 		  ;; finish the upload
 		  (remarkable--upload-complete newgen)
 
@@ -1009,6 +1076,52 @@ If PARENT is omitted the document goes to the root collection."
       (if (f-exists? tmp)
 	  (f-delete tmp t)))))
 
+
+;; ---------- Delete API interactions ----------
+
+(defun remarkable--delete-blob (uuid)
+  "Delete the document or collection UUID.
+
+This is the basic operation that simply removes a blob. It
+presents as an API call, although it actually isn't: there's no
+delete operation in the API. Instead we simply re-build the root
+index minus the index line for the selected blob."
+  (let ((e (remarkable--find-entry uuid remarkable--root-hierarchy)))
+    ;; delete the document from the hierarchy
+    (let ((hier (remarkable--delete-entry e remarkable--root-hierarchy)))
+      (cl-destructuring-bind (rootindex roothash) (remarkable--create-root-index hier)
+	(princ (format "old %s\nnew %s\n" remarkable--hash roothash))
+	;; upload the index to its new hash
+	(remarkable--put-blob-data rootindex roothash)
+	(princ "done\n")
+
+	;; upload the new root index hash
+	(let ((newgen (remarkable--put-root-index roothash
+						  remarkable--generation)))
+	  (princ (format "oldgen %s\nnewgen %s\n" remarkable--generation newgen))
+	  ;; finish the upload
+	  (remarkable--upload-complete newgen)
+
+	  ;; update our state to reflect the new root index and generation
+	  (setq remarkable--root-hierarchy hier
+		remarkable--hash roothash
+		remarkable--generation newgen))))))
+
+
+(defun remarkable--delete-document (uuid)
+  "Delete the document identified by UUID.
+
+This will delete the document and all its components."
+  (let ((e (remarkable--find-entry uuid remarkable--root-hierarchy)))
+    (when (remrkable-entry-is-collection? e)
+      (error "UUID %s is a collection" uuid))
+
+    ;; delete the contents
+    (let ((es (remarkable-entry-contents e)))
+      ))
+
+
+  )
 
 (provide 'remarkable-cloud-sync15)
 ;;; remarkable-cloud-sync15.el ends here

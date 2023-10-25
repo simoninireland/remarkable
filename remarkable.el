@@ -48,6 +48,9 @@
 (require 'remarkable-cloud-sync15)
 ;;(require remarkable-ssh)
 
+;; dired-style buffer-based interaction
+(require 'reamrkable-mode)
+
 ;; org integration
 ;;(require 'remarkable-org)
 

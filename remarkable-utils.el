@@ -46,8 +46,8 @@ epoch. We convert this to the usual Lisp list format for timestamps."
   "Convert the Lisp time value TS to ReMarkable timestamp format.
 
 The ReMarkable timestamp is measured in mulliseconds since the
-epoch."
-  (car (time-convert ts 1000)))
+epoch, held as a string."
+  (format "%d" (car (time-convert ts 1000))))
 
 
 ;; ---------- UUIDs ----------
@@ -112,11 +112,21 @@ returned as a string."
       (error "Failed to generate SHA256 hash for %s" fn))))
 
 
+(defconst remarkable--sha256-mask (- (ash 1 256) 1)
+  "Bitmask to limit a hash code to 256 bits.")
+
+
 (defun remarkable--sha256-sum (hs)
   "Return the sum of hashes HS.
 
-The hash is a number but returned as a string."
-  (format "%x" (apply #'+ (mapcar (lambda (h) (string-to-number h 16)) hs))))
+Since summing the hashes will possibly cause an overflow, we cap
+the length of the number at (expt 2 256) and then print to a string
+with leading zeros to enxure we have a 64-character hash.
+
+The hash is a number but returned as a hex string."
+  (let* ((rawsum (apply #'+ (mapcar (lambda (h) (string-to-number h 16)) hs)))
+	 (clippedsum (logand rawsum remarkable--sha256-mask)))
+    (format "%064x" clippedsum)))
 
 
 (defun remarkable--sha256-files (fns)

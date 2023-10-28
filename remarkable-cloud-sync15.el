@@ -146,8 +146,19 @@ flat list of index entries with metadata.
 Use `remarkable--make-collection-hierarchy' to extract the
 hierarchical structure of the index entries."
   (cl-destructuring-bind (hash gen index) (remarkable--get-bare-root-index)
-    (remarkable--add-metadata index)
+    (if (remarkable--root-index-has-changed? hash gen)
+	(remarkable--add-metadata index)
+      (message "Root index matches cached version"))
     (list hash gen index)))
+
+
+(defun remarkable--root-index-has-changed? (hash gen)
+  "Test whether the root index is the same as the cached version.
+
+HASH and GEN are values returned by`remarkable--get-bare-root-index'.
+The root index changes when its hash and generation change."
+  (not (and (equal hash remarkable--hash)
+	    (equal gen remarkable--generation))))
 
 
 (defun remarkable--get-bare-root-index ()
@@ -170,6 +181,8 @@ Return a list consisting of the index and the hash."
 			(length (remarkable-entry-length e))
 			(subfiles (remarkable-entry-subfiles e))
 			(contents (remarkable-entry-contents e)))
+
+		    ;; type of a "real" file or directory is 80000000
 		    (insert (format "%s:80000000:%s:%s:%s\n" hash fn subfiles length))
 		    (if contents
 			(mapc #'insert-index-line contents))))))
@@ -255,11 +268,16 @@ This function is the dual of `remarkable--create-index'."
 (defun remarkable--create-index (fns)
   "Create an index for the files in FNS.
 
+This function is intended for constructing the index for uploaded
+documents, which consist of the raw content plus supporting
+metadata. We refer to these files collectively as \"sub-files\".
+
 Each element of FNS should be either a filename or a cons cell
 consisting of a filename and the filename to be used in the
 index. This allows us to avoid copying large content files.
 
-This function is essentially the dual of `remarkable--parse-index'."
+This function is essentially the dual of `remarkable--parse-index'
+for sub-files."
   (cl-flet ((insert-index-line (fn-or-rename)
 	      "Insert an index line for file FN-OR-RENAME."
 	      (let* ((realname (if (listp fn-or-rename)
@@ -270,7 +288,9 @@ This function is essentially the dual of `remarkable--parse-index'."
 					      fn-or-rename)))
 		     (hash (remarkable--sha256-file realname))
 		     (length (f-length realname)))
-		(insert (format "%s:80000000:%s:0:%s\n" hash indexname length)))))
+
+		;; type of a sub-file is 0
+		(insert (format "%s:0:%s:0:%s\n" hash indexname length)))))
 
     (with-temp-buffer
       (insert (format "%s\n" remarkable--index-schema-version))
@@ -359,7 +379,7 @@ URL, and dereferences this to get the blob itself."
 (defun remarkable--get-content-hash (index ext)
   "Get the hash of the raw content in INDEX in format EXT."
   (if-let* ( (ce (-first (lambda (e)
-			   (if-let ((cfn (remarkable--entry-uuid e)))
+			   (if-let ((cfn (remarkable-entry-uuid e)))
 			       (equal (f-ext cfn) ext)))
 			 index)))
       (remarkable-entry-hash ce)))
@@ -403,7 +423,7 @@ type."
 	    (hash (remarkable-entry-hash e))
 	    (success (remarkable--get-content hash fn)))
       ;; file successfully downloaded
-      (message "Downloaded \"%s\" into %s" (remarkable--entry-name e) fn)
+      (message "Downloaded \"%s\" into %s" (remarkable-entry-name e) fn)
 
     ;; failed for some reason
     (error "Failed to download %s" fn)))
@@ -801,37 +821,62 @@ strip the extension and replace underscores with spaces.
   (let ((now (remarkable--lisp-timestamp (current-time))))
     (list :visibleName (remarkable--filename-to-name fn)
 	  :type "DocumentType"
-	  :parent parent
-	  :pinned :json-false
+	  :version 0
 	  :lastModified now
-	  :lastOpened "0"
-	  :lastOpenedPage 0)))
+	  :lastOpened ""
+	  :lastOpenedPage 0
+	  :parent parent
+	  :synced t
+	  :pinned :json-false
+	  :modified :json-false
+	  :deleted :json-false
+	  :metadatamodified :json-false)))
 
 
-(defun remarkable--create-content-plist (ext)
-  "Create the content description for a document of type EXT."
-  (list :dummyDocument: :false
-	:fileType: ext
-	:pageCount: 0
-	:lastOpenedPage: 0
-	:lineHeight: -1
-	:margins: 180
-	:orientation "portrait"
-	:textScale: 1
-	:transform (list :m11 1
-			 :m12 0
-			 :m13 0
-			 :m21 0
-			 :m22 1
-			 :m23 0
-			 :m31 0
-			 :m32 0
-			 :m33 1)
-	:pages []
-	:pageTags: []
-	:extraMetatata: (list :lastPen: "Finelinerv2"
-			      :lastTool: "Finelinerv2"
-			      :lastFinelinerv2Size: "1")))
+(defun remarkable--create-content-plist (fn)
+  "Create the content description for a document FN."
+  (let ((length (f-length fn))
+	(ext (f-ext fn)))
+    (list :dummyDocument :json-false
+	  :fileType ext
+	  ;;:documentMetadata :json-null
+	  ;;:extraMetadata :json-null
+	  :extraMetadata (list :LastBrushColor ""
+			       :LastBrushThicknessScale: ""
+			       :LastColor ""
+			       :LastEraserThicknessScale ""
+			       :LastEraserTool ""
+			       :LastPen "Finelinerv2"
+			       :LastPenColor ""
+			       :LastPenThicknessScale ""
+			       :LastPencil ""
+			       :LastPencilThicknessScale ""
+			       :LastTool "Finelinerv2"
+			       :ThicknessScale ""
+			       :LastFinelinerv2Size "1")
+	  :fontName ""
+	  ;;:formatVersion 1
+	  :lastOpenedPage 0
+	  :lineHeight -1
+	  :margins 180
+	  :orientation ""
+	  :pageCount 0
+	  :pages :json-null
+	  :redirectionPageMap :json-null
+	  :pageTags: :json-null
+	  ;;:sizeInBytes (number-to-string length)
+	  :tags :json-null
+	  :transform (list :m11 1
+			   :m12 0
+			   :m13 0
+			   :m21 0
+			   :m22 1
+			   :m23 0
+			   :m31 0
+			   :m32 0
+			   :m33 1)
+	  ;;:zoomMode "bestFit"
+	  )))
 
 
 (defun remarkable--create-pagedata (fn ext)
@@ -1002,7 +1047,7 @@ If PARENT is omitted the document goes to the root collection."
 	 (metadata-fn (f-swap-ext (f-join tmp uuid) "metadata"))
 	 (metadata (remarkable--create-metadata-plist fn parent))
 	 (metacontent-fn (f-swap-ext (f-join tmp uuid) "content"))
-	 (metacontent (remarkable--create-content-plist "pdf"))
+	 (metacontent (remarkable--create-content-plist fn))
 	 (pagedata-fn (f-swap-ext (f-join tmp uuid) "pagedata"))
 	 (pagedata (remarkable--create-pagedata fn "pdf")))
     (unwind-protect
@@ -1050,7 +1095,8 @@ If PARENT is omitted the document goes to the root collection."
 						uuid
 						hash
 						metadata
-						(list metacontent-fn pagedata-fn)))
+						(list metacontent-fn pagedata-fn
+						      )))
 		   (hier (remarkable--add-entry e remarkable--root-hierarchy)))
 
 	      ;; update the root index

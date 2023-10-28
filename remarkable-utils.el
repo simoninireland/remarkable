@@ -84,11 +84,16 @@ Returns the full path to the directory."
   "Write PLIST value to JSON-FN.
 
 The file is pretty-printed when saved, to make it easier to
-read (and debug)."
-  (let ((json (json-encode plist)))
-    (with-temp-file json-fn
-      (insert json)
-      (json-pretty-print (point-min) (point-max)))))
+read (and debug). The keys are alphabetised, since the API seems
+to expect this, and empty lists are rendered as empty JSON
+objects."
+  (let ((json-encoding-object-sort-predicate #'string<)
+	(json-null :json-null))
+    (let ((json (json-encode plist)))
+      (with-temp-file json-fn
+	(insert json)
+	;;(json-pretty-print (point-min) (point-max))
+	))))
 
 
 ;; ---------- SHA256 hashing of files and data ----------

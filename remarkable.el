@@ -49,7 +49,7 @@
 ;;(require remarkable-ssh)
 
 ;; dired-style buffer-based interaction
-(require 'reamrkable-mode)
+(require 'remarkable-mode)
 
 ;; org integration
 ;;(require 'remarkable-org)

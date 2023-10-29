@@ -71,6 +71,12 @@
 (defconst remarkable--index-schema-version 3
   "Supported version of the ReMarkable index schema.")
 
+(defconst remarkable--index-file-type 80000000
+  "Type used in indices to mark \"real\" files")
+
+(defconst remarkable--index-subfile-type 0
+  "Type used in indices to mark sub-files")
+
 
 ;; ---------- State variables and cache ----------
 
@@ -163,7 +169,7 @@ The root index changes when its hash and generation change."
 
 (defun remarkable--get-bare-root-index ()
   "Retrieve the root index \"bare\", without metadata."
-  (let* ((root (remarkable--get-blob-url)))
+  (let ((root (remarkable--get-blob-url)))
     (cl-destructuring-bind (hash gen) (remarkable--get-hash-generation root)
       (let ((index (remarkable--get-index hash)))
 	(list hash gen index)))))
@@ -172,24 +178,26 @@ The root index changes when its hash and generation change."
 (defun remarkable--create-root-index (hier)
   "Create a raw index from HIER, suitable to be uploaded.
 
+The index entries are all to real files (not sub-files), and
+all therefore have length 0 (since lengths are only maintained
+for sub-files).
+
 Return a list consisting of the index and the hash."
   (cl-labels ((insert-index-line (e)
 		"Insert an index line for entry E."
 		(when e
 		  (let ((hash (remarkable-entry-hash e))
 			(fn (remarkable-entry-uuid e))
-			(length (remarkable-entry-length e))
 			(subfiles (remarkable-entry-subfiles e))
 			(contents (remarkable-entry-contents e)))
-
-		    ;; type of a "real" file or directory is 80000000
-		    (insert (format "%s:80000000:%s:%s:%s\n" hash fn subfiles length))
+		    (insert (format "%s:%s:%s:%s:0\n"
+				    hash remarkable--index-file-type fn subfiles))
 		    (if contents
 			(mapc #'insert-index-line contents))))))
 
     (let* ((index (with-temp-buffer
-		    (insert (format "%s\n" remarkable--index-schema-version)) ; schema version
-		    (mapc #'insert-index-line hier) ; entries
+		    (insert (format "%s\n" remarkable--index-schema-version))
+		    (mapc #'insert-index-line hier)
 		    (buffer-string)))
 	   (hs (remarkable--entry-hashes hier))
 	   (hash (remarkable--sha256-sum hs)))
@@ -233,7 +241,8 @@ plist with elements:
    - ':uuid' the filename of the element, based on a
      UUID, possibly with an extension for a sub-file
    - ':subfiles' the number of sub-files, and
-   - ':length' the length of the element
+   - ':length' the length of the element, which is always 0
+     for a file, but a real length for a sub-file
 
 Other elements may be added to entries by other functions. In
 particular, `remarkable--get-metada' adds object-level metadata
@@ -246,7 +255,7 @@ This function is the dual of `remarkable--create-index'."
 	      (let ((fields (s-split ":" entry)))
 		(cond ((equal (length fields) 5)
 		       (list :hash (nth 0 fields)
-			     :type (nth 1 fields)
+			     :type (string-to-number (nth 1 fields))
 			     :uuid (nth 2 fields)
 			     :subfiles (string-to-number (nth 3 fields))
 			     :length (string-to-number (nth 4 fields))))
@@ -289,8 +298,8 @@ for sub-files."
 		     (hash (remarkable--sha256-file realname))
 		     (length (f-length realname)))
 
-		;; type of a sub-file is 0
-		(insert (format "%s:0:%s:0:%s\n" hash indexname length)))))
+		(insert (format "%s:%s:%s:0:%s\n"
+				hash remarkable--index-subfile-type indexname length)))))
 
     (with-temp-buffer
       (insert (format "%s\n" remarkable--index-schema-version))
@@ -466,9 +475,11 @@ HASH identifies a collection, not a document."
 	    (raw-metadata (remarkable--get-blob metahash))
 	    (metadata (json-parse-string raw-metadata
 					 :object-type 'plist)))
-      ;; patch the timestamp into a standard format
-      (plist-put metadata :lastModified
-		 (remarkable--timestamp (plist-get metadata :lastModified)))))
+      ;; patch the timestamps into a standard format
+      (mapc (lambda (k)
+	      (plist-put metadata k
+			 (remarkable--timestamp (plist-get metadata k))))
+	    (list :lastModified :lastOpened))))
 
 
 (defun remarkable--make-collection-hierarchy (es)
@@ -500,7 +511,7 @@ if required/"
   ;;
   ;; Its possible this approach will fail for very large document stores
   ;; because of ELisp's restrictions on the depth of recursive calls. It
-  ;; ight be worth re-writing it in iterative form.
+  ;; might be worth re-writing it in iterative form.
 
   (cl-labels ((copy-entry (e)
 		"Create a copy of E."
@@ -593,15 +604,31 @@ This looks only in the index entries, not in the metadata."
    (remarkable--find-entry-by-key-value :hash hash es))
 
 
-(defun remarkable--entry-hashes (es)
-  "Extract all the hashes from the (possibly nested) entries in ES."
-  (cl-labels ((entry-hashes (e)
-		"Return a list of hashes for E, including those of its contents."
-		(let ((h (remarkable-entry-hash e))
-		      (chs (mapcan #'entry-hashes (remarkable-entry-contents e))))
+(defun remarkable--map-entries (f es)
+  "Map F across the (possibly nested) entries in ES.
+
+F should be a function taking an entry as argument.
+
+Return a flat list of results, so that the hierarchy isn't
+exposed. This makes it easier to perform global operations
+on the cache."
+  (cl-labels ((mapf (e)
+		"Return a list of values for E, including those of its contents."
+		(let ((h (funcall f e))
+		      (chs (mapcan #'mapf (remarkable-entry-contents e))))
 		  (cons h chs))))
 
-    (mapcan #'entry-hashes es)))
+    (mapcan #'mapf es)))
+
+
+(defun remarkable--entry-hashes (es)
+  "Extract all the hashes from the entries in ES."
+  (remarkable--map-entries #'remarkable-entry-hash es))
+
+
+(defun remarkable--entry-uuids (es)
+  "Extract all the UUIDs from the  entries in ES."
+  (remarkable--map-entries #'remarkable-entry-uuid es))
 
 
 (defun remarkable--find-entry-n (n es)
@@ -635,7 +662,7 @@ Deleted entries are skipped."
 (defun remarkable--add-entry-to-contents (e f)
   "Add E to the contents of F.
 
-This modifies the contents of F in-place. A contents field is added
+This modifies the contents of F in-place. A :contents field is added
 if one does ot already exist."
   (let ((cs (plist-get f :contents)))
     (if cs
@@ -683,6 +710,7 @@ directly to the root collection or the contents of its parent collection."
       (remarkable--delete-entry-from-contents e p)
       es)))
 
+
 (defun remarkable--create-entry (fn uuid hash metadata extrafiles)
   "Create an entry for FN.
 
@@ -693,7 +721,7 @@ alongside the metadata and the raw content.
 "
   (let ((len (f-length fn)))
     (list :hash hash
-	  :type "DocumentType"
+	  :type remarkable--index-file-type
 	  :uuid uuid
 	  :subfiles (+ 2 (length extrafiles)) ;; content + metadata + others
 	  :length len
@@ -733,32 +761,57 @@ alongside the metadata and the raw content.
   "Return the object-level metedata associated with E."
   (plist-get e :metadata))
 
-(defun remarkable-entry-has-no-metadata? (e)
-  "Test whether E has metedata.
-
-All objects /should/ have metadata, but there seem to be some
-circumstances where they don't."
-  (null (remarkable-entry-metadata e)))
 
 (defun remarkable-entry-metadata-get (e k)
   "Return the metadata field K associated with E."
   (plist-get (remarkable-entry-metadata e) k))
 
+
 (defun remarkable-entry-uuid (e)
-  "Return the UUID associated with E."
+  "Return the UUID associated with E.
+
+This is actually a misnomer. The UUID field is indeed a UUID for
+\"real\" files (documents and collections); but for sub-files it
+is a filename with the UUID as a stem, with an extension and
+possibly other distinguishing information. So calling this function
+on entries taken from the cache or main index will indeed return
+a UUID, but calling it on sib-file entries (such as those obtained
+from `remarkable-entry-subfiles') will return a filename."
   (plist-get e :uuid))
+
 
 (defun remarkable-entry-hash (e)
   "Return the hash associated with E."
   (plist-get e :hash))
 
+
 (defun remarkable-entry-length (e)
-  "Return the length of E."
+  "Return the length of E.
+
+This is only really meaningful when applied to a sub-file,
+since the lengths og \"real\" files are always 0."
   (plist-get e :length))
+
+
+(defun remarkable-entry-is-file? (e)
+  "Test whether E is a real file.
+
+\"Real\" files are those representing documents or collections."
+  (equal (plist-get e :type) remarkable--index-file-type))
+
+
+(defun remarkable-entry-is-subfile? (e)
+  "Test whether E is a sub-file.
+
+Sub-files are those representing raw content, metadata,
+annotations, and other components of documents (\"real\" files)."
+  (equal (plist-get e :type) remarkable--index-subfile-type))
+
 
 (defun remarkable-entry-subfiles (e)
   "Return the number of sub-files associated with E."
   (plist-get e :subfiles))
+
 
 (defun remarkable-entry-changed? (e1 e2)
   "Check whether E1 and E2 have the same hash."
@@ -773,6 +826,7 @@ parent of \"trash\" indicates a deleted file (see
 `remarkable-entry-is-deleted?'."
   (remarkable-entry-metadata-get e :parent))
 
+
 (defun remarkable-entry-is-in-root-collection? (e)
   "Test whether E is in the root collection.
 
@@ -782,25 +836,39 @@ collection if its parent is \"\"."
     (or (null p)
 	(equal p ""))))
 
+
 (defun remarkable-entry-name (e)
   "Return the visible name associated with E."
   (remarkable-entry-metadata-get e :visibleName))
 
+
 (defun remarkable-entry-is-collection? (e)
   "Check whether E is a collection (folder)."
-   (equal (remarkable-entry-metadata-get e :type) "CollectionType"))
+  (equal (remarkable-entry-metadata-get e :type) "CollectionType"))
+
 
 (defun remarkable-entry-is-document? (e)
   "Check whether E is a document."
-    (equal (remarkable-entry-metadata-get e :type) "DocumentType"))
+  (equal (remarkable-entry-metadata-get e :type) "DocumentType"))
+
 
 (defun remarkable-entry-is-deleted? (e)
   "Check whether E has been deleted."
   (equal (remarkable-entry-metadata-get e :parent) "trash"))
 
+
 (defun remarkable-entry-contents (e)
   "Return the list of sub-entries of E."
   (plist-get e :contents))
+
+
+(defun remarkable-entry-subfiles (e)
+  "Return entries for the sub-files of entry E.
+
+These entries aren't stored and are retrieved from the cloud on
+demand, and let us interact with the sub-files directly when
+necessary."
+  (remarkable--get-index (remarkable-entry-hash e)))
 
 
 ;; ---------- Document archives ----------
@@ -821,11 +889,12 @@ strip the extension and replace underscores with spaces.
   (let ((now (remarkable--lisp-timestamp (current-time))))
     (list :visibleName (remarkable--filename-to-name fn)
 	  :type "DocumentType"
+	  :parent parent
 	  :version 0
+	  :createdTime "0"
 	  :lastModified now
 	  :lastOpened ""
 	  :lastOpenedPage 0
-	  :parent parent
 	  :synced t
 	  :pinned :json-false
 	  :modified :json-false
@@ -839,8 +908,6 @@ strip the extension and replace underscores with spaces.
 	(ext (f-ext fn)))
     (list :dummyDocument :json-false
 	  :fileType ext
-	  ;;:documentMetadata :json-null
-	  ;;:extraMetadata :json-null
 	  :extraMetadata (list :LastBrushColor ""
 			       :LastBrushThicknessScale: ""
 			       :LastColor ""
@@ -855,17 +922,15 @@ strip the extension and replace underscores with spaces.
 			       :ThicknessScale ""
 			       :LastFinelinerv2Size "1")
 	  :fontName ""
-	  ;;:formatVersion 1
 	  :lastOpenedPage 0
 	  :lineHeight -1
 	  :margins 180
 	  :orientation ""
 	  :pageCount 0
-	  :pages :json-null
-	  :redirectionPageMap :json-null
-	  :pageTags: :json-null
-	  ;;:sizeInBytes (number-to-string length)
-	  :tags :json-null
+	  :textScale 1
+	  :pages '()
+	  :redirectionPageMap '()
+	  :pageTags '()
 	  :transform (list :m11 1
 			   :m12 0
 			   :m13 0
@@ -874,9 +939,7 @@ strip the extension and replace underscores with spaces.
 			   :m23 0
 			   :m31 0
 			   :m32 0
-			   :m33 1)
-	  ;;:zoomMode "bestFit"
-	  )))
+			   :m33 1))))
 
 
 (defun remarkable--create-pagedata (fn ext)
@@ -1075,17 +1138,17 @@ If PARENT is omitted the document goes to the root collection."
 	  ;; upload the component files
 	  (mapc #'remarkable--put-blob (list metadata-fn
 					     metacontent-fn
-					     pagedata-fn
+					     ;;pagedata-fn
 					     fn))
 
 	  ;; update the document index and cache entry
 	  (let ((hash (remarkable--sha256-files (list metadata-fn
 						      metacontent-fn
-						      pagedata-fn
+						      ;;pagedata-fn
 						      fn)))
 		(index (remarkable--create-index (list metadata-fn
 						       metacontent-fn
-						       pagedata-fn
+						       ;;pagedata-fn
 						       (cons fn content-fn)))))
 	    ;; upload the index for the new document
 	    (remarkable--put-blob-data index hash)
@@ -1095,13 +1158,14 @@ If PARENT is omitted the document goes to the root collection."
 						uuid
 						hash
 						metadata
-						(list metacontent-fn pagedata-fn
-						      )))
+						(list metacontent-fn ;;pagedata-fn
+						      )
+						))
 		   (hier (remarkable--add-entry e remarkable--root-hierarchy)))
 
 	      ;; update the root index
 	      (cl-destructuring-bind (rootindex roothash) (remarkable--create-root-index hier)
-		;; upload the index to its new hash
+		;; upload the root index to its new hash
 		(remarkable--put-blob-data rootindex roothash)
 
 		;; upload the new root index hash

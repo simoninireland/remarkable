@@ -92,14 +92,10 @@ objects."
     (let ((json (json-encode plist)))
       (with-temp-file json-fn
 	(insert json)
-	;;(json-pretty-print (point-min) (point-max))
-	))))
+	(json-pretty-print (point-min) (point-max))))))
 
 
 ;; ---------- SHA256 hashing of files and data ----------
-
-;; sd: Should we code this up in Lisp to avoid the external dependency?
-;; Has to be done on content, though, and might be too slow for large files.
 
 (defun remarkable--sha256-file (fn)
   "Return the SHA256 hash of FN.

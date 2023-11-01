@@ -67,7 +67,7 @@ characterise the different IEEE floating-point precisions."
  (let* ((fmask (1- (ash 1 frac)))
 	(emask (1- (ash 1 exp)))
 	(bias (1- (ash 1 (1- exp)))))
-   `(let* ((n (remarkable--encode-bytes bs ,le))
+   `(let* ((n (remarkable--encode-bytes ,bs ,le))
 	   (f (logand n ,fmask))
 	   (e (logand (ash n ,(- frac)) ,emask))
 	   (s (logand (ash n ,(- (+ frac exp))) 1))
@@ -107,8 +107,8 @@ non-nil, in which case they are read little-endian."
 This type corresponds to the IEEE-754 binary64 type, which is the
 native precision of floats in Emacs. if LE is non-nil the number
 is read as little-endian; otherwise it is read as big-endian."
-  `((bs repeat 8 byte
-    :unpack-val (remarkable--unpack-double bs ,le))))
+  `((bs repeat 8 byte)
+    :unpack-val (remarkable--unpack-double bs ,le)))
 
 
 (bindat-defmacro single (&optional le)

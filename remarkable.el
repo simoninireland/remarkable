@@ -39,6 +39,7 @@
 
 ;; Utility functions
 (require 'remarkable-utils)
+(require 'remarkable-bindat-floats)
 
 ;; Cache file handling
 (require 'remarkable-cache)
@@ -47,6 +48,8 @@
 (require 'remarkable-cloud-auth)
 (require 'remarkable-cloud-sync15)
 ;;(require remarkable-ssh)
+
+;; Format conversion
 
 ;; dired-style buffer-based interaction
 (require 'remarkable-mode)

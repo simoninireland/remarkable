@@ -98,7 +98,7 @@
 ;; ---------- Public API ----------
 
 (defun remarkable-init ()
-  "Initialise the link to the ReMarkable cloud.
+  "Initialise the link to the reMarkable cloud.
 
 This authenticates against the cloud (which requires a one-time
 token the first time), downloads the root index, and constructs a
@@ -110,17 +110,20 @@ collection hierarchy for all the objects."
 
 
 (defun remarkable-load-index ()
-  "Load the index from the ReMarkable cloud.
+  "Load the index from the reMarkable cloud.
 
 The index is used to build the local view of the collection and
 document hierarchy."
-  (cl-destructuring-bind (hash gen index) (remarkable--get-root-index)
+  (cl-destructuring-bind (hash gen index)
+      (remarkable--get-root-index)
+
+    ;; update the local state to reflect the new index
     (setq remarkable--hash hash
 	  remarkable--generation gen
-	  remarkable--root-hierarchy (remarkable--make-collection-hierarchy index))
+	  remarkable--root-hierarchy index)
 
-    ;; avoid returning a huge value
-    t))
+    ;; save the cache
+    (remarkable-save-cache)))
 
 
 (cl-defun remarkable-put (fn &optional c)
@@ -149,17 +152,29 @@ If C is omitted the collection is created in the root collection.")
 Returns a list containing the index hash, its generation, and a
 flat list of index entries with metadata.
 
-Use `remarkable--make-collection-hierarchy' to extract the
-hierarchical structure of the index entries."
-  (cl-destructuring-bind (hash gen index) (remarkable--get-bare-root-index)
-    (if (remarkable--root-index-has-changed? hash gen)
-	(remarkable--add-metadata index)
-      (message "Root index matches cached version"))
-    (list hash gen index)))
+If we don't have a local index, download it and its metadata. If
+the index has changed since we last downloaded it, synchronise
+our local copy."
+  (cl-flet ((full-build (index)
+	      "Do a full build of INDEX."
+	      (let ((withmeta (remarkable--add-metadata index)))
+		(remarkable--make-collection-hierarchy withmeta)))
+
+	    (sync-build (index)
+	      "Synchronise the local state with INDEX."
+	      (remarkable--sync remarkable--root-hierarchy index)))
+
+    (cl-destructuring-bind (hash gen index)
+	(remarkable--get-bare-root-index)
+      (let ((hier (if (null remarkable--root-hierarchy)
+		      (full-build index)
+		    (sync-build index))))
+
+	(list hash gen index)))))
 
 
 (defun remarkable--root-index-has-changed? (hash gen)
-  "Test whether the root index is the same as the cached version.
+  "Test whether the root index is the same as the local version.
 
 HASH and GEN are values returned by`remarkable--get-bare-root-index'.
 The root index changes when its hash and generation change."
@@ -346,9 +361,9 @@ Return the new hierarchy."
 		h))
 
 	    (add-collection (h e)
-	      (if (remarkable-is-collection? e)
+	      (if (remarkable-entry-is-collection? e)
 		  (progn
-		    (message "New document \"%s\" added" (remarkable-entry-name e))
+		    (message "New collection \"%s\" added" (remarkable-entry-name e))
 		    (remarkable--add-entry e h))
 		h))
 
@@ -357,30 +372,30 @@ Return the new hierarchy."
 		  (error "Trying to add document to unknown collecton")
 		(progn
 		  (message "New document \"%s\" added" (remarkable-entry-name e))
-		  (remarkable--add-entry e h))))))
+		  (remarkable--add-entry e h)))))
 
-  ;; 1. remove deleted entries
-  (let ((des (remarkable--find-deleted-entries hier index)))
-    ;; 1a. remove documents
-    (let ((hier1a (cl-reduce #'remove-document des
-			     :initial-value hier)))
+    ;; 1. remove deleted entries
+    (let ((des (remarkable--find-deleted-entries hier index)))
+      ;; 1a. remove documents
+      (let ((hier1a (cl-reduce #'remove-document des
+			       :initial-value hier)))
 
-      ;; 1b remove collections (if empty)
-      (let ((hier1b  (cl-reduce #'remove-collection des
-				:initial-value hier1a)))
+	;; 1b remove collections (if empty)
+	(let ((hier1b (cl-reduce #'remove-collection des
+				 :initial-value hier1a)))
 
-	;; 2. add new entries
-	(let* ((nes (remarkable--find-new-entries-wth-metadata hier1b index)))
-	  ;; 2a. add collections
-	  (let ((hier2a a(cl-reduce #'add-collection  nes
-				    :initial-value hier1b)))
+	  ;; 2. add new entries
+	  (let* ((nes (remarkable--find-new-entries-with-metadata hier1b index)))
+	    ;; 2a. add collections
+	    (let ((hier2a (cl-reduce #'add-collection nes
+				     :initial-value hier1b)))
 
-	    ;; 2a add new documents
-	    (let ((hier2b a(cl-reduce #'add-document  nes
-				      :initial-value hier2a)))
+	      ;; 2a add new documents
+	      (let ((hier2b (cl-reduce #'add-document nes
+				       :initial-value hier2a)))
 
-	      ;; don't do 3 for now
-	      hier2b)))))))
+		;; don't do 3 for now
+		hier2b))))))))
 
 
 (defun remarkable--find-deleted-entries (hier index)
@@ -389,7 +404,6 @@ Return the new hierarchy."
 	      "Return E if it is deleted."
 	      (let ((uuid (remarkable-entry-uuid e)))
 		(if (null (remarkable--find-entry uuid index))
-		    ;; entry is not in index
 		    e))))
 
     (remarkable--mapcan-entries #'is-deleted hier)))
@@ -401,7 +415,6 @@ Return the new hierarchy."
 	      "Return E if it is new."
 	      (let ((uuid (remarkable-entry-uuid e)))
 		(if (null (remarkable--find-entry uuid hier))
-		    ;; entry is new
 		    e))))
 
     (remarkable--mapcan-entries #'is-new index)))
@@ -425,7 +438,6 @@ hash and metadata from INDEX."
 	      (let* ((uuid (remarkable-entry-uuid e))
 		     (f (remarkable--find-entry uuid hier)))
 		(if (remarkable-entry-changed? e f)
-		    ;; entry has changed
 		    e))))
 
     (remarkable--mapcan-entries #'is-changed index)))
@@ -743,7 +755,9 @@ on the cache."
 		"Return a list of values for E, including those of its contents."
 		(let ((h (funcall f e))
 		      (chs (mapcan #'mapf (remarkable-entry-contents e))))
-		  (cons h chs))))
+		  (if h
+		      (cons h chs)
+		    chs))))
 
     (mapcan #'mapf es)))
 

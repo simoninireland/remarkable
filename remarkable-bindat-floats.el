@@ -52,9 +52,8 @@ leftmost bits first) by default. Setting LE to non-nil reads the
 bytes little-endian (smallest or rightmost bits first)."
   (cl-reduce (lambda (v b)
 	       (+ (ash v 8) b))
-	     (if le
-		 (reverse bs)
-	       bs)))
+	     bs
+	     :from-end le))
 
 
 (defmacro remarkable--unpack-float (bs exp frac &optional le)

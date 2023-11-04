@@ -220,7 +220,7 @@ This should be extracted from `remarkable--file-types-plist'."
 
 To get the index, we first acquire the blob by calling
 `remarkable--get-blob', which returns the index of the folder.
-This is passed to `remarkable--parse-index' to create a folder
+This is passed to `remarkable--parse-index' to create an entry
 structure."
   (let* ((raw-index (remarkable--get-blob hash))
 	 (lines (s-lines raw-index)))
@@ -305,6 +305,147 @@ for sub-files."
       (insert (format "%s\n" remarkable--index-schema-version))
       (mapc #'insert-index-line fns)
       (buffer-string))))
+
+
+;; ---------- Hierarchy synchronisation ----------
+
+(defun remarkable--sync (hier index)
+  "Synchronise HIER with a newly-downloaded INDEX.
+
+Both HIER and INDEX consist of entries -- in the case of HIER,
+entries with hierarchy; in the case of INDEX, a flat list.
+Synchronising the two performs the following operations:
+
+1. Extract the entries in HIER that are not in INDEX
+   (the deleted entries), and remove them from HIER
+   This consists of two sub-steps:
+
+   1a. Remove the deleted documents
+   1b. Then remove the deleted collections, checking
+       that the collections are empty
+
+2. Extract the entries in INDEX that are not in HIER
+   (the new entries), retrieve their metadata, and add
+   them at the correct point in HIER. This consists of two
+   sub-steps:
+
+   2a. Add any new collections
+   2b. Add any new documents, whose parent collection must
+       exist
+
+3. Extract the entries in HIER that have different hashes
+   to the corresponding entries in INDEX, download their
+   metadata, and (if their parent has changed) move them
+   within HIER
+
+Return the new hierarchy."
+  (cl-flet ((remove-document (h e)
+	      (if (remarkable-entry-is-document? e)
+		  (progn (message "Document \"%s\" deleted" (remarkable-entry-name e))
+			 (remarkable--delete-entry e h))
+		h))
+
+	    (remove-collection (h e)
+	      (if (remarkable-entry-is-collection? e)
+		  (if (remarkable-entry-has-contents? e)
+		      (error "Trying to delete a non-empty collection %s"  (remarkable-entry-name e))
+		    (progn
+		      (message "Collection \"%s\" deleted" (remarkable-entry-name e))
+		      (remarkable--delete-entry e h)))
+		h))
+
+	    (add-collection (h e)
+	      (if (remarkable-is-collection? e)
+		  (progn
+		    (message "New document \"%s\" added" (remarkable-entry-name e))
+		    (remarkable--add-entry e h))
+		h))
+
+	    (add-document (h e)
+	      (if (not (remarkable-entry-parent-exists? e h))
+		  (error "Trying to add document to unknown collecton")
+		(progn
+		  (message "New document \"%s\" added" (remarkable-entry-name e))
+		  (remarkable--add-entry e h))))))
+
+  ;; 1. remove deleted entries
+  (let ((des (remarkable--find-deleted-entries hier index)))
+    ;; 1a. remove documents
+    (let ((hier1a (cl-reduce #'remove-document des
+			     :initial-value hier)))
+
+      ;; 1b remove collections (if empty)
+      (let ((hier1b  (cl-reduce #'remove-collection des
+				:initial-value hier1a)))
+
+	;; 2. add new entries
+	(let* ((nes (remarkable--find-new-entries-wth-metadata hier1b index)))
+	  ;; 2a. add collections
+	  (let ((hier2a a(cl-reduce #'add-collection  nes
+				    :initial-value hier1b)))
+
+	    ;; 2a add new documents
+	    (let ((hier2b a(cl-reduce #'add-document  nes
+				      :initial-value hier2a)))
+
+	      ;; don't do 3 for now
+	      hier2b)))))))
+
+
+(defun remarkable--find-deleted-entries (hier index)
+  "Return the entries in HIER that are not in INDEX."
+  (cl-flet ((is-deleted (e)
+	      "Return E if it is deleted."
+	      (let ((uuid (remarkable-entry-uuid e)))
+		(if (null (remarkable--find-entry uuid index))
+		    ;; entry is not in index
+		    e))))
+
+    (remarkable--mapcan-entries #'is-deleted hier)))
+
+
+(defun remarkable--find-new-entries (hier index)
+  "Return the entries in INDEX that are not in HIER."
+  (cl-flet ((is-new (e)
+	      "Return E if it is new."
+	      (let ((uuid (remarkable-entry-uuid e)))
+		(if (null (remarkable--find-entry uuid hier))
+		    ;; entry is new
+		    e))))
+
+    (remarkable--mapcan-entries #'is-new index)))
+
+
+(defun remarkable--find-new-entries-with-metadata (hier index)
+  "Return new entries with their metadata.
+
+This function simply applies `remarkable--add-metadata' to the
+results of `remarkable--find-new-entries'."
+  (remarkable--add-metadata (remarkable--find-new-entries hier index)))
+
+
+(defun remarkable--find-changed-entries (hier index)
+  "Return the entries in INDEX that are in HIER with different hashes.
+
+The entry returned will have the UUID of an entry in HIER, with the
+hash and metadata from INDEX."
+  (cl-flet ((is-changed (e)
+	      "Return E if it is changed."
+	      (let* ((uuid (remarkable-entry-uuid e))
+		     (f (remarkable--find-entry uuid hier)))
+		(if (remarkable-entry-changed? e f)
+		    ;; entry has changed
+		    e))))
+
+    (remarkable--mapcan-entries #'is-changed index)))
+
+
+(defun remarkable--find-changed-entries-with-metadata (hier index)
+  "Return changed entries with their metadata.
+
+This function simply applies `remarkable--add-metadata' to the
+results of `remarkable--find-changed-entries'."
+  (remarkable--add-metadata (remarkable--find-changed-entries hier index)))
 
 
 ;; ---------- Download API interactions ----------
@@ -468,18 +609,13 @@ the ':metadata' tag."
 (defun remarkable--get-metadata (hash)
   "Get the metadata plist associated with the document HASH.
 
-Return nil if there is no associated metadata, which typically means that
-HASH identifies a collection, not a document."
+Return nil if there is no associated metadata, which shouldn't
+happen."
   (if-let* ((index (remarkable--get-index hash))
 	    (metahash (remarkable--get-metadata-hash index))
-	    (raw-metadata (remarkable--get-blob metahash))
-	    (metadata (json-parse-string raw-metadata
-					 :object-type 'plist)))
-      ;; patch the timestamps into a standard format
-      (mapc (lambda (k)
-	      (plist-put metadata k
-			 (remarkable--timestamp (plist-get metadata k))))
-	    (list :lastModified :lastOpened))))
+	    (raw-metadata (remarkable--get-blob metahash)))
+      (json-parse-string raw-metadata
+			 :object-type 'plist)))
 
 
 (defun remarkable--make-collection-hierarchy (es)
@@ -604,7 +740,7 @@ This looks only in the index entries, not in the metadata."
    (remarkable--find-entry-by-key-value :hash hash es))
 
 
-(defun remarkable--map-entries (f es)
+(defun remarkable--mapcan-entries (f es)
   "Map F across the (possibly nested) entries in ES.
 
 F should be a function taking an entry as argument.
@@ -623,12 +759,12 @@ on the cache."
 
 (defun remarkable--entry-hashes (es)
   "Extract all the hashes from the entries in ES."
-  (remarkable--map-entries #'remarkable-entry-hash es))
+  (remarkable--mapcan-entries #'remarkable-entry-hash es))
 
 
 (defun remarkable--entry-uuids (es)
   "Extract all the UUIDs from the  entries in ES."
-  (remarkable--map-entries #'remarkable-entry-uuid es))
+  (remarkable--mapcan-entries #'remarkable-entry-uuid es))
 
 
 (defun remarkable--find-entry-n (n es)
@@ -688,7 +824,14 @@ if one does ot already exist."
   "Add an entry E to ES.
 
 E will be added in the appropriate place in the hierarchy, either
-directly to the root collection or the contents of its parent collection."
+directly to the root collection or the contents of its parent
+collection."
+
+  ;; don't add duplicate entries
+  (let ((uuid(remarkable-entry-uuid e) ))
+    (if (remarkable--find-entry uuid es)
+	(error "Entry already exists for UUID %s"uuid )))
+
   (if (remarkable-entry-is-in-root-collection? e)
       ;; add entry to es
       (append es (list e))
@@ -717,8 +860,7 @@ directly to the root collection or the contents of its parent collection."
 UUID is the UUID used for FN in the cloud, with hash HASH.
 METADATA is the metadata plist that is added directly to the
 entry. EXTRAFILES is the set of additional files created
-alongside the metadata and the raw content.
-"
+alongside the metadata and the raw content."
   (let ((len (f-length fn)))
     (list :hash hash
 	  :type remarkable--index-file-type
@@ -837,8 +979,16 @@ collection if its parent is \"\"."
 	(equal p ""))))
 
 
+(defun remarkable-entry-parent-exists? (e es)
+  "Test whether the parent of E exists in ES.
+
+The root collection always exists."
+  (or (remarkable-entry-is-in-root-collection? e)
+      (not (null (remarkable--find-entry (remarkable-entry-parent e) es)))))
+
+
 (defun remarkable-entry-name (e)
-  "Return the visible name associated with E."
+  "Return the user-level name associated with E."
   (remarkable-entry-metadata-get e :visibleName))
 
 
@@ -857,12 +1007,27 @@ collection if its parent is \"\"."
   (equal (remarkable-entry-metadata-get e :parent) "trash"))
 
 
+(defun remarkable-entry-last-modified (e)
+  "Return the last-modified time of entry E as a Lisp timestamp."
+  (remarkable--timestamp  (remarkable-entry-metadata-get e :lastModified)))
+
+
+(defun remarkable-entry-last-opened (e)
+  "Return the last-opened time of entry E as a Lisp timestamp."
+  (remarkable--timestamp (remarkable-entry-metadata-get e :lastOpened)))
+
+
 (defun remarkable-entry-contents (e)
   "Return the list of sub-entries of E."
   (plist-get e :contents))
 
 
-(defun remarkable-entry-subfiles (e)
+(defun remarkable-entry-has-contents? (e)
+  "Test whether E has contents, i.e., is a non-empty collection."
+  (not (null (remarkable-entry-contents e))))
+
+
+(defun remarkable-entry-subfile-entries (e)
   "Return entries for the sub-files of entry E.
 
 These entries aren't stored and are retrieved from the cloud on
@@ -928,9 +1093,9 @@ strip the extension and replace underscores with spaces.
 	  :orientation ""
 	  :pageCount 0
 	  :textScale 1
-	  :pages '()
-	  :redirectionPageMap '()
-	  :pageTags '()
+	  :pages :json-null
+	  :redirectionPageMap :json-null
+	  :pageTags :json-null
 	  :transform (list :m11 1
 			   :m12 0
 			   :m13 0
@@ -978,7 +1143,7 @@ a \"PUT\" request in its payload.)"
     (list url maxUpload)))
 
 
-(defun remarkable--put-blob-data (data &optional hash)
+(cl-defun remarkable--put-blob-data (data &optional hash)
    "Upload a blob of DATA, using HASH if provided.
 
 This works by hashing DATA (if HASH is omitted) and acquiring
@@ -1003,7 +1168,7 @@ and then making a \"PUT\" request against this URL to upload DATA."
      t))
 
 
-(defun remarkable--put-blob (fn &optional hash)
+(cl-defun remarkable--put-blob (fn &optional hash)
   "Upload the file FN, using HASH if provided.
 
 This uses `remarkable--put-blob-data' to send the file."
@@ -1110,9 +1275,7 @@ If PARENT is omitted the document goes to the root collection."
 	 (metadata-fn (f-swap-ext (f-join tmp uuid) "metadata"))
 	 (metadata (remarkable--create-metadata-plist fn parent))
 	 (metacontent-fn (f-swap-ext (f-join tmp uuid) "content"))
-	 (metacontent (remarkable--create-content-plist fn))
-	 (pagedata-fn (f-swap-ext (f-join tmp uuid) "pagedata"))
-	 (pagedata (remarkable--create-pagedata fn "pdf")))
+	 (metacontent (remarkable--create-content-plist fn)))
     (unwind-protect
 	(progn
 	  ;; check the parent exists and is a collection
@@ -1132,24 +1295,24 @@ If PARENT is omitted the document goes to the root collection."
 	  ;; create the metadata files of different kinds
 	  (remarkable--create-json-file metadata-fn metadata)
 	  (remarkable--create-json-file metacontent-fn metacontent)
-	  (with-temp-file pagedata-fn
-	    (insert pagedata))
 
 	  ;; upload the component files
 	  (mapc #'remarkable--put-blob (list metadata-fn
 					     metacontent-fn
-					     ;;pagedata-fn
 					     fn))
 
 	  ;; update the document index and cache entry
-	  (let ((hash (remarkable--sha256-files (list metadata-fn
-						      metacontent-fn
-						      ;;pagedata-fn
-						      fn)))
-		(index (remarkable--create-index (list metadata-fn
-						       metacontent-fn
-						       ;;pagedata-fn
-						       (cons fn content-fn)))))
+	  ;; the hash for the index has to be computed from
+	  ;; the hashes of the sub-files in alphabetical order
+	  (let* ((sorted-files (sort (list metadata-fn
+					   metacontent-fn
+					   fn)
+				     #'string<))
+		 (hash (remarkable--sha256-files sorted-files))
+		 (index (remarkable--create-index (list metadata-fn
+							metacontent-fn
+							(cons fn content-fn)))))
+
 	    ;; upload the index for the new document
 	    (remarkable--put-blob-data index hash)
 
@@ -1158,9 +1321,7 @@ If PARENT is omitted the document goes to the root collection."
 						uuid
 						hash
 						metadata
-						(list metacontent-fn ;;pagedata-fn
-						      )
-						))
+						(list metacontent-fn)))
 		   (hier (remarkable--add-entry e remarkable--root-hierarchy)))
 
 	      ;; update the root index
@@ -1183,8 +1344,11 @@ If PARENT is omitted the document goes to the root collection."
 	  uuid)
 
       ;; clean-up temporary storage
-      (if (f-exists? tmp)
-	  (f-delete tmp t)))))
+      ;; (if (f-exists? tmp)
+      ;;	  (f-delete tmp t))
+      (message (format "tmp %s" tmp))
+      )))
+
 
 
 ;; ---------- Delete API interactions ----------

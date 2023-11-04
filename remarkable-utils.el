@@ -80,6 +80,8 @@ Returns the full path to the directory."
   (file-attribute-size (file-attributes fn)))
 
 
+;; ---------- Missing JSON operations ----------
+
 (defun remarkable--create-json-file (json-fn plist)
   "Write PLIST value to JSON-FN.
 
@@ -92,7 +94,8 @@ objects."
     (let ((json (json-encode plist)))
       (with-temp-file json-fn
 	(insert json)
-	(json-pretty-print (point-min) (point-max))))))
+	;;(json-pretty-print (point-min) (point-max))
+	))))
 
 
 ;; ---------- SHA256 hashing of files and data ----------
@@ -101,8 +104,10 @@ objects."
   "Return the SHA256 hash of FN.
 
 This relies on an external program defined in
-`remarkable--sha256-shell-command'. The hash is a number, but is
-returned as a string."
+`remarkable--sha256-shell-command', whose output is then parsed
+using the regexp `remarkable--sha256-regexp' to obtain the hash.
+
+The hash is a number, but is returned as a string."
   (with-temp-buffer
     (call-process-shell-command remarkable--sha256-shell-command
 				fn
@@ -113,21 +118,39 @@ returned as a string."
       (error "Failed to generate SHA256 hash for %s" fn))))
 
 
-(defconst remarkable--sha256-mask (- (ash 1 256) 1)
-  "Bitmask to limit a hash code to 256 bits.")
+(defun remarkable--decode-hex (s)
+  "Return the list of bytes represented by the hexadecimal string S."
+  (cl-labels ((nibble (c)
+		"Return the nibble represented by C."
+		(s-index-of (char-to-string c) "0123456789abcdef" t))
+
+	      (byte (c1 c2)
+		"Return the byte represented by C1 and C2."
+		(+ (ash (nibble c1) 4) (nibble c2)))
+
+	      (process (h)
+		"Process bytes encoded in H."
+		(if (null h)
+		    nil
+		  (cl-destructuring-bind (c1 c2 &rest cs) h
+		    (cons (byte c1 c2)
+			  (process cs))))))
+
+    (let ((cs (string-to-list s)))
+      (if (not (cl-evenp (length cs)))
+	  (error "Hex string %s is of uneven length" s)
+	(process cs)))))
 
 
 (defun remarkable--sha256-sum (hs)
-  "Return the sum of hashes HS.
+  "Return the hash of the hashes HS.
 
-Since summing the hashes will possibly cause an overflow, we cap
-the length of the number at (expt 2 256) and then print to a string
-with leading zeros to enxure we have a 64-character hash.
-
-The hash is a number but returned as a hex string."
-  (let* ((rawsum (apply #'+ (mapcar (lambda (h) (string-to-number h 16)) hs)))
-	 (clippedsum (logand rawsum remarkable--sha256-mask)))
-    (format "%064x" clippedsum)))
+This isn't actually the sum of the hashes: it's the hash of the
+string formed by concatenating the bytes of the hashes -- not
+their stringified encoding."
+  (let* ((bs (mapcan #'remarkable--decode-hex hs))
+	 (s (apply #'unibyte-string bs)))
+    (remarkable--sha256-data s)))
 
 
 (defun remarkable--sha256-files (fns)
@@ -136,7 +159,7 @@ The hash is a number but returned as a hex string."
 This simply computes the file hashes and then calls
 `remarkable--sha256-sum'. The hash is a number but is
 returned as a string."
-  (let* ((hs (mapcar #'remarkable--sha256-file fns)))
+  (let ((hs (mapcar #'remarkable--sha256-file fns)))
     (remarkable--sha256-sum hs)))
 
 

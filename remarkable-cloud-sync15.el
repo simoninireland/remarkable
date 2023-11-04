@@ -123,7 +123,7 @@ document hierarchy."
     t))
 
 
-(defun remarkable-put (fn &optional c)
+(cl-defun remarkable-put (fn &optional c)
   "Store the file FN into collection C
 
 FN should be a local file name. C should be the UUID of a
@@ -135,7 +135,7 @@ collection.")
   "Delete the folder of collection with the given UUID.")
 
 
-(defun remarkable-make-collection (fn &optional c)
+(cl-defun remarkable-make-collection (fn &optional c)
   "Create a new collection FN in collection C.
 
 If C is omitted the collection is created in the root collection.")
@@ -281,25 +281,16 @@ This function is intended for constructing the index for uploaded
 documents, which consist of the raw content plus supporting
 metadata. We refer to these files collectively as \"sub-files\".
 
-Each element of FNS should be either a filename or a cons cell
-consisting of a filename and the filename to be used in the
-index. This allows us to avoid copying large content files.
-
 This function is essentially the dual of `remarkable--parse-index'
 for sub-files."
-  (cl-flet ((insert-index-line (fn-or-rename)
-	      "Insert an index line for file FN-OR-RENAME."
-	      (let* ((realname (if (listp fn-or-rename)
-				   (car fn-or-rename)
-				 fn-or-rename))
-		     (indexname (f-filename (if (listp fn-or-rename)
-						(cdr fn-or-rename)
-					      fn-or-rename)))
-		     (hash (remarkable--sha256-file realname))
-		     (length (f-length realname)))
+  (cl-flet ((insert-index-line (fn)
+	      "Insert an index line for file FN."
+	      (let ((hash (remarkable--sha256-file fn))
+		    (basename (f-filename fn))
+		    (length (f-length fn)))
 
 		(insert (format "%s:%s:%s:0:%s\n"
-				hash remarkable--index-subfile-type indexname length)))))
+				hash remarkable--index-subfile-type basename length)))))
 
     (with-temp-buffer
       (insert (format "%s\n" remarkable--index-schema-version))
@@ -830,7 +821,7 @@ collection."
   ;; don't add duplicate entries
   (let ((uuid(remarkable-entry-uuid e) ))
     (if (remarkable--find-entry uuid es)
-	(error "Entry already exists for UUID %s"uuid )))
+	(error "Entry already exists for UUID %s" uuid)))
 
   (if (remarkable-entry-is-in-root-collection? e)
       ;; add entry to es
@@ -855,9 +846,8 @@ collection."
 
 
 (defun remarkable--create-entry (fn uuid hash metadata extrafiles)
-  "Create an entry for FN.
+  "Create an entry forFN with UUID with hash HASH.
 
-UUID is the UUID used for FN in the cloud, with hash HASH.
 METADATA is the metadata plist that is added directly to the
 entry. EXTRAFILES is the set of additional files created
 alongside the metadata and the raw content."
@@ -1149,9 +1139,13 @@ a \"PUT\" request in its payload.)"
 This works by hashing DATA (if HASH is omitted) and acquiring
 an upload URL for that hash using `remarkable--get-blob-upload-url',
 and then making a \"PUT\" request against this URL to upload DATA."
-   (unless hash
-     (setq hash (remarkable--sha256-data data)))
-   (cl-destructuring-bind (url maxUpload) (remarkable--get-blob-upload-url hash)
+   (cl-destructuring-bind (url maxUpload)
+       (remarkable--get-blob-upload-url (if hash
+					    hash
+					  (remarkable--sha256-data data)))
+     (princ (format "putting data to %s" (if hash
+					    hash
+					  (remarkable--sha256-data data))))
      (request url
        :type "PUT"
        ;; :files (list (cons "upload" fn))
@@ -1268,13 +1262,11 @@ Supported file type extension are given in `remarkable-file-types'."
 If PARENT is omitted the document goes to the root collection."
   (let* ((uuid (remarkable--uuid))
 	 (ext (f-ext fn))
-	 (dir (f-dirname fn))
-	 (name (f-no-ext fn))
-	 (content-fn (f-swap-ext (f-join dir uuid) ext))
 	 (tmp (remarkable--create-temporary-directory-name uuid))
+	 (content-fn (f-swap-ext (f-join tmp uuid) ext))
 	 (metadata-fn (f-swap-ext (f-join tmp uuid) "metadata"))
-	 (metadata (remarkable--create-metadata-plist fn parent))
 	 (metacontent-fn (f-swap-ext (f-join tmp uuid) "content"))
+	 (metadata (remarkable--create-metadata-plist fn parent))
 	 (metacontent (remarkable--create-content-plist fn)))
     (unwind-protect
 	(progn
@@ -1296,59 +1288,65 @@ If PARENT is omitted the document goes to the root collection."
 	  (remarkable--create-json-file metadata-fn metadata)
 	  (remarkable--create-json-file metacontent-fn metacontent)
 
-	  ;; upload the component files
-	  (mapc #'remarkable--put-blob (list metadata-fn
-					     metacontent-fn
-					     fn))
+	  ;; copy in content file (this makes file name handling easier)
+	  (f-copy fn content-fn)
 
-	  ;; update the document index and cache entry
+	  ;; create the document index and entry
 	  ;; the hash for the index has to be computed from
 	  ;; the hashes of the sub-files in alphabetical order
 	  (let* ((sorted-files (sort (list metadata-fn
 					   metacontent-fn
-					   fn)
+					   content-fn)
 				     #'string<))
 		 (hash (remarkable--sha256-files sorted-files))
 		 (index (remarkable--create-index (list metadata-fn
 							metacontent-fn
-							(cons fn content-fn)))))
+							content-fn)))
+		 (e (remarkable--create-entry content-fn
+					      uuid
+					      hash
+					      metadata
+					      (list metacontent-fn)))
+		 (hier (remarkable--add-entry e remarkable--root-hierarchy)))
 
-	    ;; upload the index for the new document
-	    (remarkable--put-blob-data index hash)
+	    ;; create a new root index
+	    (cl-destructuring-bind (rootindex roothash)
+		(remarkable--create-root-index hier)
 
-	    ;; add the new document to the hierarchy
-	    (let* ((e (remarkable--create-entry fn
-						uuid
-						hash
-						metadata
-						(list metacontent-fn)))
-		   (hier (remarkable--add-entry e remarkable--root-hierarchy)))
+	      ;; Above this point we create all the subfiles and their
+	      ;; hashes and indices, but don't commit them to the
+	      ;; cloud. Below this point we persist all the files,
+	      ;; update the root index and our local state
 
-	      ;; update the root index
-	      (cl-destructuring-bind (rootindex roothash) (remarkable--create-root-index hier)
-		;; upload the root index to its new hash
-		(remarkable--put-blob-data rootindex roothash)
+	      ;; upload the subfiles
+	      (mapc #'remarkable--put-blob (list metadata-fn
+						 metacontent-fn
+						 content-fn))
 
-		;; upload the new root index hash
-		(let ((newgen (remarkable--put-root-index roothash
-							  remarkable--generation)))
-		  ;; finish the upload
-		  (remarkable--upload-complete newgen)
+	      ;; upload the index for the new document
+	      (remarkable--put-blob-data index hash)
 
-		  ;; update our state to reflect the new root index and generation
-		  (setq remarkable--root-hierarchy hier
-			remarkable--hash roothash
-			remarkable--generation newgen)))))
+	      ;; upload the root index to its new hash
+	      (remarkable--put-blob-data rootindex roothash)
 
-	  ;; return the UUID of the newly-uploaded document
-	  uuid)
+	      ;; upload the new root index hash, getting the new generation
+	      (let ((newgen (remarkable--put-root-index roothash
+							remarkable--generation)))
+		;; finish the upload
+		(remarkable--upload-complete newgen)
+
+		;; update the local state to reflect the new root
+		;; index and generation
+		(setq remarkable--root-hierarchy hier
+		      remarkable--hash roothash
+		      remarkable--generation newgen))
+
+	      ;; return the UUID of the newly-created document
+	      uuid)))
 
       ;; clean-up temporary storage
-      ;; (if (f-exists? tmp)
-      ;;	  (f-delete tmp t))
-      (message (format "tmp %s" tmp))
-      )))
-
+      (if (f-exists? tmp)
+	  (f-delete tmp t)))))
 
 
 ;; ---------- Delete API interactions ----------

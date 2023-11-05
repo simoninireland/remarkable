@@ -49,6 +49,7 @@ This will query for a document and (if there's a choice)
 themdesired content type, and then dpwnload this document and
 attach it."
   (interactive)
+  (remarkable-load-index)
   (cl-destructuring-bind (e type)
       (remarkable-org--choose-document-type remarkable--root-hierarchy)
     (remarkable-org--attach-document e type)
@@ -64,12 +65,17 @@ check the format is compatible with the tablet. The document's
 visible name on the tablet is set to the same as the heading to
 which it is attached."
   (interactive)
-  (if-let* ((fn (remarkable-org--choose-attachment))
+  (remarkable-load-index)
+  (if-let* ((afn (remarkable-org--choose-attachment))
+	    (attach-dir (org-attach-dir))
+	    (fn (f-join attach-dir afn))
 	    (heading (org-get-heading t t t t)))
       (progn
 	(set-text-properties 0 (length heading) nil heading)
 	(remarkable--upload-document fn :title heading)
-	(message "Uploaded \"%s\"" heading))))
+	(message "Uploaded \"%s\" (%s)" heading afn)
+
+	(remarkable-save-cache))))
 
 
 ;; ---------- Attaching documents ----------
@@ -133,7 +139,8 @@ one possible choice of attachment. The attachment chosen must
 have a content type that's accepted by the tablet, as defined by
 `remarkable--file-types-supported'.
 
-Return the attachment file to upload or nil."
+Return the attachment file to upload or nil. This is a filename
+in the attachment diretory, /not/ a full path."
   (if-let* ((attach-dir (org-attach-dir))
 	    (fns (org-attach-file-list attach-dir))
 	    (exts (remarkable--file-types-supported))

@@ -94,6 +94,26 @@
 
 ;; ---------- Hooks ----------
 
+;; Synchronisation hooks. Each is called with the entry of the appropriate
+;; document. The restunr value of the hook functions is ignored, meaning that
+;; (for example) there's no way to stop a document being deleted, since it's
+;; already happened in the cloud.
+
+(defvar remarkable--document-added-hook nil
+  "Hook called when a new document is found during synchronisation.")
+
+(defvar remarkable--collection-added-hook nil
+  "Hook called when a new collection is found during synchronisation.")
+
+(defvar remarkable--document-deleted-hook nil
+  "Hook called when a document is found to have been deleted during synchronisation.")
+
+(defvar remarkable--collection-deleted-hook nil
+  "Hook called when a collection is found to have been deleted during synchronisation.")
+
+(defvar remarkable--document-changed-hook nil
+  "Hook called when a document is found to have changed during synchronisation.")
+
 
 ;; ---------- Public API ----------
 
@@ -240,7 +260,7 @@ Return a list consisting of the index and the hash."
 ;; ---------- File type handling ----------
 
 (defun remarkable--file-types-supported ()
-  "Return a list 0f the file types we support.
+  "Return a list of the file types we support.
 
 This should be extracted from `remarkable--file-types-plist'."
   (list "pdf" "epub" "rm" "lines"))
@@ -362,11 +382,16 @@ Synchronising the two performs the following operations:
    metadata, and (if their parent has changed) move them
    within HIER
 
+Each stage runs the aporopriate hook functions, allowing clients
+to respond to the changes.
+
 Return the new hierarchy."
   (cl-flet ((remove-document (h e)
 	      (if (remarkable-entry-is-document? e)
-		  (progn (message "Document \"%s\" deleted" (remarkable-entry-name e))
-			 (remarkable--delete-entry e h))
+		  (progn
+		    (run-hook-with-args 'remarkable--document-deleted-hook e)
+		    (remarkable--delete-entry e h)
+		    (message "Document \"%s\" deleted" (remarkable-entry-name e)))
 		h))
 
 	    (remove-collection (h e)
@@ -374,23 +399,26 @@ Return the new hierarchy."
 		  (if (remarkable-entry-has-contents? e)
 		      (error "Trying to delete a non-empty collection %s"  (remarkable-entry-name e))
 		    (progn
-		      (message "Collection \"%s\" deleted" (remarkable-entry-name e))
-		      (remarkable--delete-entry e h)))
+		      (run-hook-with-args 'remarkable--collection-deleted-hook e)
+		      (remarkable--delete-entry e h)
+		      (message "Collection \"%s\" deleted" (remarkable-entry-name e))))
 		h))
 
 	    (add-collection (h e)
 	      (if (remarkable-entry-is-collection? e)
 		  (progn
-		    (message "New collection \"%s\" added" (remarkable-entry-name e))
-		    (remarkable--add-entry e h))
+		    (run-hook-with-args 'remarkable--collection-added-hook e)
+		    (remarkable--add-entry e h)
+		    (message "New collection \"%s\" added" (remarkable-entry-name e)))
 		h))
 
 	    (add-document (h e)
 	      (if (not (remarkable-entry-parent-exists? e h))
 		  (error "Trying to add document to unknown collecton")
 		(progn
-		  (message "New document \"%s\" added" (remarkable-entry-name e))
-		  (remarkable--add-entry e h)))))
+		  (run-hook-with-args 'remarkable--document-added-hook e)
+		  (remarkable--add-entry e h)
+		  (message "New document \"%s\" added" (remarkable-entry-name e))))))
 
     ;; 1. remove deleted entries
     (let ((des (remarkable--find-deleted-entries hier index)))
@@ -1275,10 +1303,12 @@ Supported file type extension are given in `remarkable-file-types'."
     (member ext (remarkable--file-types-supported))))
 
 
-(cl-defun remarkable--upload-document (fn &optional (parent ""))
+(cl-defun remarkable--upload-document (fn &key parent title)
   "Upload document FN to given PARENT.
 
-If PARENT is omitted the document goes to the root collection."
+If PARENT is omitted the document goes to the root collection.
+If TITLE is supplied it is used as the visible name for the
+document."
   (let* ((uuid (remarkable--uuid))
 	 (ext (f-ext fn))
 	 (tmp (remarkable--create-temporary-directory-name uuid))
@@ -1299,6 +1329,10 @@ If PARENT is omitted the document goes to the root collection."
 
 		  (if (not (remarkable-entry-is-collection? p))
 		      (error "Parent %s is not a collection" parent)))))
+
+	  ;; set title if supplied
+	  (if title
+	      (plist-put metadata :visibleName title))
 
 	  ;; create the temporary directory
 	  (f-mkdir-full-path tmp)

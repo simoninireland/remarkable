@@ -41,18 +41,19 @@
   (let ((buf (get-buffer-create remarkable-mode--buffer-name)))
     (set-buffer buf)
 
-    ;; delete any contents
-    (erase-buffer)
+    (let ((inhibit-read-only t)) ;; in case we're re-using the buffer
+      ;; delete any contents
+      (erase-buffer)
 
-    ;; insert files
-    (remarkable-mode--create-file-list remarkable--root-hierarchy)
-    (goto-char (point-min))
+      ;; insert files
+      (remarkable-mode--create-file-list remarkable--root-hierarchy)
+      (goto-char (point-min)))
 
-    ;; make buffer read-only
+    ;; make buffer read-only and mark as unmodified
     (read-only-mode t)
     (not-modified)
 
-    ;; place buffer into remarkale-mode
+    ;; place buffer into remarkable-mode
     (remarkable-mode)
 
     ;; display the buffer
@@ -69,7 +70,7 @@
 (cl-defun remarkable-mode--make-entry-icon (e &optional blank)
   "Create the icon for entry E.
 
-If blank is non-nil, the entry is inserted as blanks to
+If blank is non-nil, the icon is inserted as blanks to
 preserve indentation."
   (cond (blank
 	 "    ")
@@ -91,7 +92,10 @@ preserve indentation."
 		   ;; main title line
 		   (insert (remarkable-mode--make-indent indent)
 			   (remarkable-mode--make-entry-icon e)
-			   (remarkable-entry-name e))
+			   (let ((n (remarkable-entry-name e)))
+			     (if n
+				 n
+			       "???")))
 		   (if (remarkable-entry-is-collection? e)
 		       (insert "/"))
 		   (insert "\n")

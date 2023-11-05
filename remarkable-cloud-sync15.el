@@ -114,16 +114,28 @@ collection hierarchy for all the objects."
 
 The index is used to build the local view of the collection and
 document hierarchy."
-  (cl-destructuring-bind (hash gen index)
+  (interactive)
+  (cl-destructuring-bind (hash gen hier)
       (remarkable--get-root-index)
 
     ;; update the local state to reflect the new index
     (setq remarkable--hash hash
 	  remarkable--generation gen
-	  remarkable--root-hierarchy index)
+	  remarkable--root-hierarchy hier)
 
     ;; save the cache
     (remarkable-save-cache)))
+
+
+(defun remarkable-get (uuid type fn)
+  "Download content of type TYPE for document UUID into FN."
+  (let ((e (remarkable--find-entry uuid remarkable--root-hierarchy)))
+    (if  (remarkable--get-content e type fn)
+	;; file successfully downloaded
+	(message "Downloaded \"%s\" into %s" (remarkable-entry-name e) fn)
+
+      ;; failed for some reason
+      (error "Failed to download %s" fn))))
 
 
 (cl-defun remarkable-put (fn &optional c)
@@ -166,11 +178,17 @@ our local copy."
 
     (cl-destructuring-bind (hash gen index)
 	(remarkable--get-bare-root-index)
-      (let ((hier (if (null remarkable--root-hierarchy)
-		      (full-build index)
-		    (sync-build index))))
+      (let ((hier (cond ((null remarkable--root-hierarchy)
+			 (message "Rebuilding local documents")
+			 (full-build index))
+			((remarkable--root-index-has-changed? hash gen)
+			 (message "Synchronising local documents")
+			 (sync-build index))
+			(t
+			 (message "Local documents in sync with cloud")
+			 remarkable--root-hierarchy))))
 
-	(list hash gen index)))))
+	(list hash gen hier)))))
 
 
 (defun remarkable--root-index-has-changed? (hash gen)
@@ -529,57 +547,44 @@ URL, and dereferences this to get the blob itself."
     blob))
 
 
-(defun remarkable--get-content-hash (index ext)
-  "Get the hash of the raw content in INDEX in format EXT."
-  (if-let* ( (ce (-first (lambda (e)
-			   (if-let ((cfn (remarkable-entry-uuid e)))
-			       (equal (f-ext cfn) ext)))
-			 index)))
-      (remarkable-entry-hash ce)))
-
-
-(defun remarkable--get-content-types (index)
-  "Return a list of the content types available in INDEX.
+(defun remarkable--get-content-types (e)
+  "Return a list of the content types available for entry E.
 
 The types are a list of extensions, a sub-set of those returned by
 `remarkable--file-types-supported' for which we have handlers."
-  (if-let ((exts (remarkable--file-types-supported)))
-      (mapcan (lambda (ext)
-		(if (-first (lambda (e)
-			      (if-let ((cfn (remarkable-entry-uuid e)))
-				  (equal (f-ext cfn) ext)))
-			    index)
-		    (list ext)))
-	      exts)))
+  (let* ((hash (remarkable-entry-hash e))
+	 (index (remarkable--get-index hash))
+	 (exts (remarkable--file-types-supported)))
+    (mapcan (lambda (sf)
+	      (let* ((cfn (remarkable-entry-uuid sf))
+		     (ext (f-ext cfn)))
+		(if (member ext exts)
+		    (list ext))))
+	    index)))
 
 
-(defun remarkable--get-content (hash fn)
-  "Get the content associated with the document HASH into file FN.
+(defun remarkable--get-content-type (e type)
+  "Return the entry of the subfile for content type TYPE on entry E."
+  (let* ((hash (remarkable-entry-hash e))
+	 (index (remarkable--get-index hash)))
+      (-first (lambda (sf)
+		(let* ((cfn (remarkable-entry-uuid sf))
+		       (ext (f-ext cfn)))
+		  (equal ext type)))
+	      index)))
 
-The extension of FN will define to the type of content wanted.
+
+(defun remarkable--get-content (e type fn)
+  "Get the content of type TYE for entry E into file FN.
 
 Returns nil if there is no associated content of the correct
 type."
-  (if-let* ((index (remarkable--get-index hash))
-	    (ext (f-ext fn)))
-      (if (member ext (remarkable--get-content-types index))
-	  (let ((contenthash (remarkable--get-content-hash index ext)))
-	    (let ((coding-system-for-write 'no-conversion))
-	      (with-temp-file fn
-		(insert (remarkable--get-blob contenthash)))
-	      t)))))
-
-
-(defun remarkable--download-document (uuid fn)
-  "Download the content of the document with the given UUID into FN."
-  (if-let* ((e (remarkable--find-entry uuid remarkable--root-hierarchy))
-	    (hash (remarkable-entry-hash e))
-	    (success (remarkable--get-content hash fn)))
-      ;; file successfully downloaded
-      (message "Downloaded \"%s\" into %s" (remarkable-entry-name e) fn)
-
-    ;; failed for some reason
-    (error "Failed to download %s" fn)))
+  (if-let* ((sf (remarkable--get-content-type e type))
+	    (hash (remarkable-entry-hash sf)))
+      (let ((coding-system-for-write 'no-conversion))
+	(with-temp-file fn
+	  (insert (remarkable--get-blob hash)))
+	t)))
 
 
 ;; ---------- Object-level metadata management ----------

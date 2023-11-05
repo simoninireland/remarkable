@@ -56,6 +56,22 @@ attach it."
     (message "Attached %s" (remarkable-entry-name e))))
 
 
+(defun remarkable-org-read ()
+  "Upload an attachment from the current org node to the reMarkable cloud.
+
+This will query for an attachment if there is more than one, and
+check the format is compatible with the tablet. The document's
+visible name on the tablet is set to the same as the heading to
+which it is attached."
+  (interactive)
+  (if-let* ((fn (remarkable-org--choose-attachment))
+	    (heading (org-get-heading t t t t)))
+      (progn
+	(set-text-properties 0 (length heading) nil heading)
+	(remarkable--upload-document fn :title heading)
+	(message "Uploaded \"%s\"" heading))))
+
+
 ;; ---------- Attaching documents ----------
 
 (defun remarkable-org--chooser (hier)
@@ -109,6 +125,35 @@ Return the document entry and chosen type."
       (list e type)))
 
 
+(defun remarkable-org--choose-attachment ()
+  "Choose an attachment from the current node to upload.
+
+This presents a `completing-read' buffer if there is more than
+one possible choice of attachment. The attachment chosen must
+have a content type that's accepted by the tablet, as defined by
+`remarkable--file-types-supported'.
+
+Return the attachment file to upload or nil."
+  (if-let* ((attach-dir (org-attach-dir))
+	    (fns (org-attach-file-list attach-dir))
+	    (exts (remarkable--file-types-supported))
+	    (allowed-fns (-filter (lambda (fn)
+				    (member (f-ext fn) exts))
+				  fns)))
+      (cond ((equal (length allowed-fns) 0)
+	     (message "No attachment of a supported content type to upload"))
+	    ((equal (length allowed-fns) 1)
+	     (car allowed-fns))
+	    (t
+	     (completing-read "Attachment to upload: "
+			      allowed-fns
+			      nil t)))
+
+    ;; no attachments
+    (message "No attachments to upload")
+    nil))
+
+
 (defun remarkable-org--attach-document (e type)
   "Attach the subfile of type TYPE of E to the current node.
 
@@ -156,8 +201,23 @@ This simply concatenates the UUID of E with the TYPE mas extension."
 
 ;; ---------- Keymap ----------
 
+;; We add the functions to the attachment commands (C-c C-a) so
+;; that they're integrated with the rest of the attachment machinery
+;; We add two commands:
+;;
+;;    r:         download a document and attach it
+;;    R or C-r:  upload an attachment
+
+(add-to-list 'org-attach-commands
+	     (list (list ?r) #'remarkable-org-attach
+		   "Download an attachment from the reMarkable tablet."))
 
 
+(add-to-list 'org-attach-commands
+	     (list (list ?R ?\C-r) #'remarkable-org-read
+		   "Upload an attachment to read on the reMarkable tablet."))
+
+(setq org-attach-commands (cdr org-attach-commands))
 
 (provide 'remarkable-org)
 ;; remarkable-org.el ends here

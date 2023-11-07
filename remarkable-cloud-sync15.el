@@ -881,7 +881,7 @@ collection."
 
 
 (defun remarkable--delete-entry (e es)
-  "Remove the entry E from ES."
+  "Remove the entry E from ES, retruning the new hierarchy."
   (if (remarkable-entry-is-in-root-collection? e)
       ;; remove directly
       (-remove-item e es)
@@ -1303,6 +1303,41 @@ Supported file type extension are given in `remarkable-file-types'."
     (member ext (remarkable--file-types-supported))))
 
 
+(defun remarkable--upload-document-subfiles (fs)
+  "Upload the subfiles FS and create a document file index."
+  (let* ((sorted-files (sort fs #'string<))
+	 (hash (remarkable--sha256-files sorted-files))
+	 (index (remarkable--create-index fs)))
+
+    ;; upload the subfiles
+    (mapc #'remarkable--put-blob sorted-files)
+
+    ;; upload the index for the new document
+    (remarkable--put-blob-data index hash)))
+
+
+(defun remarkable--upload-root-index (hier)
+  "Upload a new root index to the cloud and update the local state."
+
+  (cl-destructuring-bind (rootindex roothash)
+      (remarkable--create-root-index hier)
+
+    ;; upload the root index to its new hash
+    (remarkable--put-blob-data rootindex roothash)
+
+    ;; update the root index
+    (let ((newgen (remarkable--put-root-index roothash
+					      remarkable--generation)))
+      ;; finish the upload
+      (remarkable--upload-complete newgen)
+
+      ;; update the local state to reflect the new root
+      ;; index and generation
+      (setq remarkable--root-hierarchy hier
+	    remarkable--hash roothash
+	    remarkable--generation newgen))))
+
+
 (cl-defun remarkable--upload-document (fn &key parent title)
   "Upload document FN to given PARENT.
 
@@ -1344,58 +1379,22 @@ document."
 	  ;; copy in content file (this makes file name handling easier)
 	  (f-copy fn content-fn)
 
-	  ;; create the document index and entry
-	  ;; the hash for the index has to be computed from
-	  ;; the hashes of the sub-files in alphabetical order
-	  (let* ((sorted-files (sort (list metadata-fn
-					   metacontent-fn
-					   content-fn)
-				     #'string<))
-		 (hash (remarkable--sha256-files sorted-files))
-		 (index (remarkable--create-index (list metadata-fn
-							metacontent-fn
-							content-fn)))
-		 (e (remarkable--create-entry content-fn
+	  ;; create the document entry and add it to the hierarchy
+	  (let* ((e (remarkable--create-entry content-fn
 					      uuid
 					      hash
 					      metadata
 					      (list metacontent-fn)))
 		 (hier (remarkable--add-entry e remarkable--root-hierarchy)))
 
-	    ;; create a new root index
-	    (cl-destructuring-bind (rootindex roothash)
-		(remarkable--create-root-index hier)
+	    ;; upload the document and its sub-files
+	    (remarkable--upload-document-subfiles sorted-files)
 
-	      ;; Above this point we create all the subfiles and their
-	      ;; hashes and indices, but don't commit them to the
-	      ;; cloud. Below this point we persist all the files,
-	      ;; update the root index and our local state
+	    ;; update the root index and local state
+	    (remarkable--upload-root-index hier)
 
-	      ;; upload the subfiles
-	      (mapc #'remarkable--put-blob (list metadata-fn
-						 metacontent-fn
-						 content-fn))
-
-	      ;; upload the index for the new document
-	      (remarkable--put-blob-data index hash)
-
-	      ;; upload the root index to its new hash
-	      (remarkable--put-blob-data rootindex roothash)
-
-	      ;; upload the new root index hash, getting the new generation
-	      (let ((newgen (remarkable--put-root-index roothash
-							remarkable--generation)))
-		;; finish the upload
-		(remarkable--upload-complete newgen)
-
-		;; update the local state to reflect the new root
-		;; index and generation
-		(setq remarkable--root-hierarchy hier
-		      remarkable--hash roothash
-		      remarkable--generation newgen))
-
-	      ;; return the UUID of the newly-created document
-	      uuid)))
+	    ;; return the UUID of the newly-created document
+	    uuid))
 
       ;; clean-up temporary storage
       (if (f-exists? tmp)

@@ -43,7 +43,10 @@
 
 
 (defun remarkable-save-cache ()
-  "Saved the state of the system to the cache."
+  "Saved the state of the system to the cache.
+
+The old state is backed-up first."
+  (remarkable--backup-cache remarkable--cache-file-name)
   (remarkable--save-cache remarkable--cache-file-name)
   t)
 
@@ -73,7 +76,7 @@ This persists important state information as a plist:
    - document generation
    - entry hierarchy"
   (with-temp-file fn
-    (prin1 `(:device-uuid ,remarkable--device-uuid
+    (print `(:device-uuid ,remarkable--device-uuid
 	     :device-token ,remarkable--device-token
 	     :user-token ,remarkable--user-token
 	     :user-token-expires ,remarkable--user-token-expires
@@ -81,6 +84,15 @@ This persists important state information as a plist:
 	     :generation ,remarkable--generation
 	     :hierarchy ,remarkable--root-hierarchy)
 	   (current-buffer))))
+
+
+(defun remarkable--backup-cache (fn)
+  "Create a backup of the cache file FN in the same directory.
+
+The backup gets the extension \".bak\"."
+  (let ((bfn (f-swap-ext fn "bak")))
+    (with-temp-file bfn
+      (insert-file-contents fn))))
 
 
 (defun remarkable--load-cache (fn)

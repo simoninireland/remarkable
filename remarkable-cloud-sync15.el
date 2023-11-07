@@ -86,16 +86,16 @@
   "The collection and document hierarchy, extracted from the root index.")
 
 (defvar remarkable--generation nil
-  "Generation of files retrieved from the root.")
+  "Generation of the root index.")
 
 (defvar remarkable--hash nil
-  "Hash of files retrieved.")
+  "Hash of the root index.")
 
 
 ;; ---------- Hooks ----------
 
 ;; Synchronisation hooks. Each is called with the entry of the appropriate
-;; document. The restunr value of the hook functions is ignored, meaning that
+;; document. The return value of the hook functions is ignored, meaning that
 ;; (for example) there's no way to stop a document being deleted, since it's
 ;; already happened in the cloud.
 
@@ -112,7 +112,10 @@
   "Hook called when a collection is found to have been deleted during synchronisation.")
 
 (defvar remarkable--document-changed-hook nil
-  "Hook called when a document is found to have changed during synchronisation.")
+  "Hook called when a document is found to have changed during synchronisation.
+
+\"Changed\" includes moving within the hierarchy, being
+annotated, being tagged, or any other change.")
 
 
 ;; ---------- Public API ----------

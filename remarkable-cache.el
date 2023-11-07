@@ -54,10 +54,12 @@ The old state is backed-up first."
 (defun remarkable-clear-cache ()
   "Clear all cached data.
 
-This doesn't affect the current system state. To clear
-that as well, call `remarkable-deauthenticate'."
+This will force a full re-synchronisation at the next call to
+`remarkable-sync'.
+"
   (if (remarkable-cache-exists?)
       (f-delete remarkable--cache-file-name))
+  (setq remarkable--root-hierarchy nil)
   t)
 
 

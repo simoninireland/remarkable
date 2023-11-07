@@ -126,7 +126,7 @@ collection hierarchy for all the objects."
   (interactive)
   (unless (remarkable-authenticated?)
     (call-interactively #'remarkable-authenticate))
-  (remarkable-load-index))
+  (remarkable-sync))
 
 
 (defun remarkable-sync ()
@@ -144,8 +144,7 @@ document hierarchy."
 	  remarkable--root-hierarchy hier)
 
     ;; save the cache
-    ;;(remarkable-save-cache)
-    ))
+    (remarkable-save-cache)))
 
 
 (defun remarkable-get (uuid type fn)

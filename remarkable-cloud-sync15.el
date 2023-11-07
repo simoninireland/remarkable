@@ -129,7 +129,7 @@ collection hierarchy for all the objects."
   (remarkable-load-index))
 
 
-(defun remarkable-load-index ()
+(defun remarkable-sync ()
   "Load the index from the reMarkable cloud.
 
 The index is used to build the local view of the collection and
@@ -144,7 +144,8 @@ document hierarchy."
 	  remarkable--root-hierarchy hier)
 
     ;; save the cache
-    (remarkable-save-cache)))
+    ;;(remarkable-save-cache)
+    ))
 
 
 (defun remarkable-get (uuid type fn)
@@ -389,9 +390,9 @@ Return the new hierarchy."
   (cl-flet ((remove-document (h e)
 	      (if (remarkable-entry-is-document? e)
 		  (progn
+		    (message "Document \"%s\" deleted" (remarkable-entry-name e))
 		    (run-hook-with-args 'remarkable--document-deleted-hook e)
-		    (remarkable--delete-entry e h)
-		    (message "Document \"%s\" deleted" (remarkable-entry-name e)))
+		    (remarkable--delete-entry e h))
 		h))
 
 	    (remove-collection (h e)
@@ -399,26 +400,26 @@ Return the new hierarchy."
 		  (if (remarkable-entry-has-contents? e)
 		      (error "Trying to delete a non-empty collection %s"  (remarkable-entry-name e))
 		    (progn
-		      (run-hook-with-args 'remarkable--collection-deleted-hook e)
-		      (remarkable--delete-entry e h)
-		      (message "Collection \"%s\" deleted" (remarkable-entry-name e))))
+		      (message "Collection \"%s\" deleted" (remarkable-entry-name e))
+				      (run-hook-with-args 'remarkable--collection-deleted-hook e)
+		      (remarkable--delete-entry e h)))
 		h))
 
 	    (add-collection (h e)
 	      (if (remarkable-entry-is-collection? e)
 		  (progn
+		    (message "New collection \"%s\" added" (remarkable-entry-name e))
 		    (run-hook-with-args 'remarkable--collection-added-hook e)
-		    (remarkable--add-entry e h)
-		    (message "New collection \"%s\" added" (remarkable-entry-name e)))
+		    (remarkable--add-entry e h))
 		h))
 
 	    (add-document (h e)
 	      (if (not (remarkable-entry-parent-exists? e h))
 		  (error "Trying to add document to unknown collecton")
 		(progn
+		  (message "New document \"%s\" added" (remarkable-entry-name e))
 		  (run-hook-with-args 'remarkable--document-added-hook e)
-		  (remarkable--add-entry e h)
-		  (message "New document \"%s\" added" (remarkable-entry-name e))))))
+		  (remarkable--add-entry e h)))))
 
     ;; 1. remove deleted entries
     (let ((des (remarkable--find-deleted-entries hier index)))

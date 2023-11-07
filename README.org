@@ -1,8 +1,7 @@
-* ~remarkable~: An Emacs org mode interface to the ReMarkable tablet
+* ~remarkable~: An Emacs org mode interface to the reMarkable tablet
 
   ~remarkable~ is a way of moving information between Emacs and the
-  [[https://remarkable.com][ReMarkable tablet]].
-
+  [[https://remarkable.com][reMarkable tablet]].
 
 ** Current state
 

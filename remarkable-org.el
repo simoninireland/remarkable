@@ -46,7 +46,7 @@
   "Attach a document from the reMarkable cloud to the current node.
 
 This will query for a document and (if there's a choice)
-themdesired content type, and then dpwnload this document and
+the desired content type, and then download this document and
 attach it."
   (interactive)
   (remarkable-load-index)
@@ -54,7 +54,10 @@ attach it."
       (remarkable-org--choose-document-type remarkable--root-hierarchy)
     (remarkable-org--attach-document e type)
     (remarkable-org--set-uuid-property e type)
-    (message "Attached %s" (remarkable-entry-name e))))
+    (message "Attached %s" (remarkable-entry-name e))
+
+    ;; update the cache
+    (remarkable-save-cache)))
 
 
 (defun remarkable-org-read ()
@@ -75,6 +78,7 @@ which it is attached."
 	(remarkable--upload-document fn :title heading)
 	(message "Uploaded \"%s\" (%s)" heading afn)
 
+	;; update the cache
 	(remarkable-save-cache))))
 
 

@@ -1,4 +1,4 @@
-;;; remarkable-bindat-floats.el --- Binary float parsing -*- lexical-binding: t -*-
+;;; remarkable-bindat.el --- Binary type parsing -*- lexical-binding: t -*-
 
 ;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
@@ -20,8 +20,7 @@
 ;;; Commentary:
 
 ;; bindat types for reading and writing IEEE-754 floating point
-;; numbers. There are types for single- and double-precision
-;; floats, encoded in big- and litte-endian formats.
+;; numbers and varuint-encoded integers.
 ;;
 ;; The IEEE-754 standard defines a common schema for representing
 ;; floating-point numbers, parameterised by the number of bits in the
@@ -98,6 +97,36 @@ non-nil, in which case they are read little-endian."
   (remarkable--unpack-float bs 8 23 le))
 
 
+;; ---------- Variable-length unsigned integer parsing ----------
+
+;; This seems like a really, /really/ stupid way to encode
+;; integers: do we /really/ care about minimising representation
+;; sizes for this application?
+
+(defun remarkable--unpack-varuint ()
+  "Unpack a variable-length unsigned integer.
+
+The integer is held little-endian packed into 7-bit chunks."
+
+  ;; note that this refers to bindat-raw and bindat-idx taken from the
+  ;; dynamic scope
+  (let ((i 0)
+	(shift 0)
+	(result 0))
+    (while (let ((b (aref bindat-raw (+ bindat-idx i))))
+	     (setq result (logior result
+				  (ash (logand b #16r7f) shift))
+		   shift (+ shift 7)
+		   i (1+ i))
+	     (> b #16r7f)))
+
+    ;; skip over the bytes we consumed
+    (setq bindat-idx (+ bindat-idx i))
+
+    ;; return the int
+    result))
+
+
 ;; ---------- bindat types ----------
 
 (bindat-defmacro double (&optional le)
@@ -120,5 +149,11 @@ as big-endian."
     :unpack-val (remarkable--unpack-single bs ,le)))
 
 
-(provide 'remarkable-bindat-floats)
-;;; remarkable-bindat-floats.el ends here
+(bindat-defmacro varuint ()
+  "A variable-length unsigned integer."
+  '((v unit 0)
+    :unpack-val (remarkable--unpack-varuint)))
+
+
+(provide 'remarkable-bindat)
+;;; remarkable-bindat.el ends here

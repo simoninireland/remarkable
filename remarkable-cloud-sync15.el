@@ -133,10 +133,10 @@ collection hierarchy for all the objects."
 
 
 (defun remarkable-sync ()
-  "Load the index from the reMarkable cloud.
+  "Load the root index from the reMarkable cloud.
 
-The index is used to build the local view of the collection and
-document hierarchy."
+The root index is used to build the local view of the collection and
+document hierarchy. It is cached to speed up processing."
   (interactive)
   (cl-destructuring-bind (hash gen hier)
       (remarkable--get-root-index)
@@ -606,7 +606,7 @@ The types are a list of extensions, a sub-set of those returned by
 
 
 (defun remarkable--get-content (e type fn)
-  "Get the content of type TYE for entry E into file FN.
+  "Get the content of type TYPE for entry E into file FN.
 
 Returns nil if there is no associated content of the correct
 type."

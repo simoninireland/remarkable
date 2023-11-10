@@ -1,7 +1,9 @@
-# Compiled
+# Compiled files and tags
 *.elc
+TAGS
 
 # Packaging
+Cask
 .cask
 
 # Backup files

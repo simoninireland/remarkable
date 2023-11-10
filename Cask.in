@@ -1,0 +1,15 @@
+(source "melpa" "https://melpa.org/packages/")
+
+(package "PACKAGE"
+	 "VERSION"
+	 "SHORT_DESCRIPTION")
+
+(files FILES)
+
+(depends-on "s")
+(depends-on "f")
+(depends-on "bindat"
+(depends-on "org" "8.0")
+
+(development
+  (depends-on "package-lint"))

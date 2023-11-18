@@ -27,9 +27,12 @@ SHORT_DESCRIPTION = Link from Org mode to the reMarkable tablet
 SOURCES_FILES = \
 	remarkable.el \
 	jwt.el \
+	remarkable-custom.el \
 	remarkable-utils.el \
 	remarkable-cache.el \
 	remarkable-cloud-sync15.el \
+	remarkable-ssh.el \
+	remarkable-rm6.rl \
 	remarkable-mode.el \
 	remarkable-org.el
 

@@ -8,6 +8,7 @@
 
 (depends-on "s")
 (depends-on "f")
+(depends-on "dash
 (depends-on "bindat"
 (depends-on "org" "8.0")
 

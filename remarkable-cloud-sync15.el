@@ -896,7 +896,7 @@ collection."
 
 
 (defun remarkable--create-entry (fn uuid hash metadata extrafiles)
-  "Create an entry forFN with UUID with hash HASH.
+  "Create an entry for FN with UUID with hash HASH.
 
 METADATA is the metadata plist that is added directly to the
 entry. EXTRAFILES is the set of additional files created
@@ -1307,7 +1307,9 @@ Supported file type extension are given in `remarkable-file-types'."
 
 
 (defun remarkable--upload-document-subfiles (fs)
-  "Upload the subfiles FS and create a document file index."
+  "Upload the subfiles FS and create a document file index.
+
+Return the hash of the uploaded document."
   (let* ((sorted-files (sort fs #'string<))
 	 (hash (remarkable--sha256-files sorted-files))
 	 (index (remarkable--create-index fs)))
@@ -1316,7 +1318,10 @@ Supported file type extension are given in `remarkable-file-types'."
     (mapc #'remarkable--put-blob sorted-files)
 
     ;; upload the index for the new document
-    (remarkable--put-blob-data index hash)))
+    (remarkable--put-blob-data index hash)
+
+    ;; return the hash
+    hash))
 
 
 (defun remarkable--upload-root-index (hier)
@@ -1341,6 +1346,36 @@ Supported file type extension are given in `remarkable-file-types'."
 	    remarkable--generation newgen))))
 
 
+(cl-defun remarkable--create-subfiles (fn uuid dir &key parent title)
+  "Create the sub-files for file FN in DIR with the given UUID.
+
+The metadata can be altered using PARENT and TITLE.
+
+Return the metadata and a list of sub-files consisting of the content
+sub-file, metadata sub0file, and any others created."
+  (let* ((ext (f-ext fn))
+	 (content-fn (f-swap-ext (f-join dir uuid) ext))
+	 (metadata-fn (f-swap-ext (f-join dir uuid) "metadata"))
+	 (metacontent-fn (f-swap-ext (f-join dir uuid) "content"))
+	 (metadata (remarkable--create-metadata-plist fn parent))
+	 (metacontent (remarkable--create-content-plist fn)))
+
+    ;; set title if supplied
+    (if title
+	(plist-put metadata :visibleName title))
+
+    ;; create the metadata files of different kinds
+    (remarkable--create-json-file metadata-fn metadata)
+    (remarkable--create-json-file metacontent-fn metacontent)
+
+    ;; copy in content file (this makes file name handling easier)
+    (f-copy fn content-fn)
+
+    ;; return the metadata and sub-files
+    (list metadata
+	  (list content-fn metadata-fn metacontent-fn))))
+
+
 (cl-defun remarkable--upload-document (fn &key parent title)
   "Upload document FN to given PARENT.
 
@@ -1348,13 +1383,7 @@ If PARENT is omitted the document goes to the root collection.
 If TITLE is supplied it is used as the visible name for the
 document."
   (let* ((uuid (remarkable--uuid))
-	 (ext (f-ext fn))
-	 (tmp (remarkable--create-temporary-directory-name uuid))
-	 (content-fn (f-swap-ext (f-join tmp uuid) ext))
-	 (metadata-fn (f-swap-ext (f-join tmp uuid) "metadata"))
-	 (metacontent-fn (f-swap-ext (f-join tmp uuid) "content"))
-	 (metadata (remarkable--create-metadata-plist fn parent))
-	 (metacontent (remarkable--create-content-plist fn)))
+	 (tmp (remarkable--create-temporary-directory-name uuid)))
     (unwind-protect
 	(progn
 	  ;; check the parent exists and is a collection
@@ -1372,32 +1401,33 @@ document."
 	  (if title
 	      (plist-put metadata :visibleName title))
 
-	  ;; create the temporary directory
+	  ;; create temporary directory
 	  (f-mkdir-full-path tmp)
 
-	  ;; create the metadata files of different kinds
-	  (remarkable--create-json-file metadata-fn metadata)
-	  (remarkable--create-json-file metacontent-fn metacontent)
-
-	  ;; copy in content file (this makes file name handling easier)
-	  (f-copy fn content-fn)
-
-	  ;; create the document entry and add it to the hierarchy
-	  (let* ((e (remarkable--create-entry content-fn
-					      uuid
-					      hash
-					      metadata
-					      (list metacontent-fn)))
-		 (hier (remarkable--add-entry e remarkable--root-hierarchy)))
+	  ;; create the metadata and sub-files
+	  (cl-destructuring-bind (metadata fns)
+	      (remarkable--create-subfiles fn uuid tmp
+					   :parant parent
+					   :title title)
 
 	    ;; upload the document and its sub-files
-	    (remarkable--upload-document-subfiles sorted-files)
+	    (let* ((content-fn (car fns))  ; first sub-file
+		   (other-fns (cddr fns))  ; other sub-files excluding metadata
+		   (hash (remarkable--upload-document-subfiles fns))
 
-	    ;; update the root index and local state
-	    (remarkable--upload-root-index hier)
+		   ;; create entry and new hierarchy
+		   (e (remarkable--create-entry content-fn
+						uuid
+						hash
+						metadata
+						other-fns))
+		   (hier (remarkable--add-entry e remarkable--root-hierarchy)))
 
-	    ;; return the UUID of the newly-created document
-	    uuid))
+	      ;; update the root index
+	      (remarkable--upload-root-index hier)
+
+	      ;; return the UUID of the newly-created document
+	      uuid)))
 
       ;; clean-up temporary storage
       (if (f-exists? tmp)

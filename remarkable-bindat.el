@@ -114,17 +114,39 @@ The integer is held little-endian packed into 7-bit chunks."
 	(shift 0)
 	(result 0))
     (while (let ((b (aref bindat-raw (+ bindat-idx i))))
-	     (setq result (logior result
-				  (ash (logand b #16r7f) shift))
-		   shift (+ shift 7)
-		   i (1+ i))
-	     (> b #16r7f)))
+	     (setf result (logior result
+				  (ash (logand b #16r7f) shift)))
+	     (cl-incf shift 7)
+	     (cl-incf i)
+	     (not (logand b #16r80))))
 
     ;; skip over the bytes we consumed
-    (setq bindat-idx (+ bindat-idx i))
+    (cl-incf bindat-idx i)
 
     ;; return the int
     result))
+
+
+;; ---------- Variable-length list repeat ----------
+
+;; Again, we need this because the file format doesn't state
+;; how many blocks it contains or introduce a proper termination
+;; marker, which makes life harder.
+
+(defun remarkable--unpack-unbounded (type)
+  "Unpack a list of TYPE until there are no more to unpack."
+
+  ;; note that this refers to bindat-raw and bindat-idx taken from the
+  ;; dynamic scope
+  (let ((elements '()))
+    (while (and (> (length bindat-raw)
+		   bindat-idx)
+		(if-let ((next (bindat-unpack type bindat-raw bindat-idx)))
+		    (progn
+		      (setf elements (append elements (list next)))
+		      (cl-incf bindat-idx (bindat-length type next))
+		      t))))
+    elements))
 
 
 ;; ---------- bindat types ----------
@@ -153,6 +175,12 @@ as big-endian."
   "A variable-length unsigned integer."
   '((v unit 0)
     :unpack-val (remarkable--unpack-varuint)))
+
+
+(bindat-defmacro unbounded (type)
+  "A variable-length list of type TYPE."
+  `((l unit 0)
+    :unpack-val (remarkable--unpack-unbounded ,type)))
 
 
 (provide 'remarkable-bindat)

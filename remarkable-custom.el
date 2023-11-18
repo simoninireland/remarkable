@@ -37,20 +37,41 @@
 ;; ---------- Cache ----------
 
 (defcustom remarkable--cache-file-name (f-join user-emacs-directory "rm-cache.el")
-  "File to store the document cache."
+  "File to store the local reMarkable document cache."
   :group 'Remarkable
   :type 'file)
+
+
+;; ---------- ssh access ----------
+
+(defcustom remarkable-ssh--docstore-path "~/.local/share/remarkable/xochitl"
+  "Path to the document store on the reMarkable tablet."
+  :group 'Remarkable
+  :type 'string)
+
+(defcustom remarkable-ssh--user "root"
+  "User on the reMarkable tablet."
+  :group 'Remarkable
+  :type 'string)
+
+(defcustom remarkable--ssh-host "remarkable.local"
+  "Name of the reMarkable tablet as seen from the client.
+
+This will typically be an entry in the local DNS. It can also
+be an IP address to access the tablet over USB."
+  :group 'Remarkable
+  :type 'string)
 
 
 ;; ---------- Agent strings ----------
 
 (defcustom remarkable--user-agent "remarkable-emacs"
-  "The user agent string used for communicating with the ReMarkable cloud."
+  "The user agent string used for communicating with the reMarkable cloud."
   :group 'Remarkable
   :type 'string)
 
 (defcustom remarkable--device-description "desktop-linux"
-  "The device string used for communncating with the ReMarkable cloud.
+  "The device string used for communncating with the reMarkable cloud.
 
 This has to be taken from the limited set that the API recognises,
 but apparently has no significance."
@@ -68,8 +89,7 @@ and returning the hash on standard output. The actual hash will be
 extracted from this output using the regexp given in
 `remarkable--sha256-regexp'."
   :group 'Remarkable
-  :type '(choice (const :tag "OS X" "shasum -a 256 -")
-		 (const :tag "Linux" "shasum -a 256 -")))
+  :type 'string)
 
 
 (defcustom remarkable--sha256-regexp  (rx (group (one-or-more (any hex-digit))))

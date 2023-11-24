@@ -91,6 +91,27 @@ The tag is encoded as a plist with keys ':index' and ':type'."
     :unpack-val (remarkable-rm6--unpack-uuid v)))
 
 
+;; Optional values
+(defun remarkable-rm6--unpack-optional (default type)
+  "Attempt to parse a value of type TYPE, returning DEFAULT if it fails.
+
+A failed parse will leave the parser in the same state (at the
+same point) as when the macro was invoked."
+  (let ((here bindat-idx))
+    (condition-case err
+	(let* ((val (funcall type)))
+	  (or val
+	      default))
+      (error
+       (setq bindat-idx here) ;; reset the current point
+       default))))
+
+(bindat-defmacro optional (default &rest type)
+  "Type constructor for an optional value of TYPE, returning DEFAULT if it fails."
+  `((opt unit 0)
+    :unpack-val (remarkable-rm6--unpack-optional ,default ,type)))
+
+
 ;; Block types
 (defconst remarkable-rm6--block-type
   (bindat-type
@@ -264,6 +285,37 @@ TYPE should be the name of a 'bindat' type."
     ;;(anchorOriginX    type remarkable-rm6--lww-float-type)
     )
   "Type of a tree node block.")
+
+
+;; Scene block types
+(defconst remarkable-rm6--scnene-line-item-block-type
+  (bindat-type
+    ()))
+
+(defconst remarkable-rm6--rects-value-type
+  (bindat-type
+    (numRects varuint)
+    (rects repeat numrects
+	   remarkable-rm6--double-type))
+  "Type of lists of rectangles.")
+
+(defconst remarkable-rm6--scene-glyph-item-block-type
+  (bindat-type
+    (start    0 optional type remarkable-rm6--int-type)
+    (length   0 optional type remarkable-rm6--int-type)
+    (colourId type remarkable-rm6--int-type)
+    (text     type remarkable-rm6--string-type)
+    (rects    remarkable-rm6--subblocks 1
+	      remarkable-rm6--rects-value-type))
+  "Type of scnee glyph items blocks.")
+
+(defconst remarkable-rm6--line-value-type
+  (bindat-type
+    (toolId remarkable-rm6--int-type)
+    (colourId remarkable-rm6--int-type)
+    (thicknessScale remarkable-rm6--double-type)
+    (startingLength remarkable-rm6--single-type)
+    ()))
 
 
 ;; ---------- Public API ----------

@@ -35,15 +35,16 @@
   "Return the Tramp path to a fle P in the document store.
 
 The path is to the root of the document store if P is nil."
-  (format "/sshx:%1$s@%2$s:/home/%1$s/%3$s%4$s"
-	  remarkable-ssh--user
-	  remarkable-ssh--host
-	  remarkable-ssh--docstore-path p))
+  (f-join (format "/sshx:%1$s@%2$s:/home/%1$s/%3$s"
+		  remarkable-ssh--user
+		  remarkable-ssh--host ;; used twice in the path
+		  remarkable-ssh--docstore-path)
+	  p))
 
 
 (defun remarkable-ssh--metadata-file-name-for-uuid (uuid)
   "Return the name of the metadata file for the document UUID."
-  (f-join (remarkable-ssh--tramp-docstore-path) (format "%s%s" uuid "." remarkable--metadata-ext)))
+  (remarkable-ssh--tramp-docstore-path (concat uuid "." remarkable--metadata-ext)))
 
 
 ;; ---------- Index handling ----------
@@ -97,6 +98,67 @@ metadata file, as identified by
 
 
 ;; ---------- Uploading API ----------
+
+(defun remarkable-ssh--upload-file (fn)
+  "Upload FN to the tablet's docstore."
+  (let ((tfn (remarkable-ssh--tramp-docstore-path (f-base fn))))
+    (f-copy fn tfn)))
+
+
+(defun remarkable-ssh--create-directory (dir)
+  "Create a directory DIR in the tablet's docstore.
+
+We don't seem to be able to use `f-mkdir' to do this over a Tramp
+connection, so instead we explicitly spawn a remote process to do
+the job."
+  (let ((default-directory (remarkable-ssh--tramp-docstore-path))
+	(dir (f-base dir)))
+    (with-temp-buffer
+      (start-file-process "mkdir" (current-buffer) "/bin/sh" "-c" (format "mkdir %s" dir)))))
+
+
+(cl-defun remarkable-ssh--upload-document (fn hier &key parent title)
+  "Upload document FN to given PARENT, adding the resulting entry to HIER.
+
+If PARENT is omitted the document goes to the root collection.
+If TITLE is supplied it is used as the visible name for the
+document."
+  (let* ((uuid (remarkable--uuid))
+	 (tmp (remarkable--create-temporary-directory-name uuid)))
+    (unwind-protect
+	(progn
+	  ;; create temporary directory
+	  (f-mkdir-full-path tmp)
+
+	  (cl-destructuring-bind (metadata fns)
+	      (remarkable--create-subfiles fn uuid tmp
+					   :parent parent
+					   :title title)
+
+	    ;; create the empty marker directory
+	    (remarkable-ssh--create-directory uuid)
+
+	    ;; upload the document and its sub-files
+	    (mapc #'remarkable-ssh--upload-file fns)
+
+	    ;; add an entry to the hierarchy
+	    (let* ((content-fn (car fns))  ; first sub-file is always the raw contents
+		   (other-fns (cddr fns))  ; other sub-files excluding metadata
+		   (e (remarkable--create-entry content-fn uuid
+						0               ; ignore hashes for now
+						metadata
+						other-fns))
+		   (newhier (remarkable--add-entry e hier)))
+
+	      ;; return the UUID of the newly-created document
+	      ;;and the new hierarchy of entries containing this
+	      ;; document
+	      (list uuid newhier))))
+
+      ;; clean-up temporary storage
+      (if (f-exists? tmp)
+	  (f-delete tmp t)))))
+
 
 (defun remarkable-ssh--upload-complete ()
   "Signal the end of an uploading.

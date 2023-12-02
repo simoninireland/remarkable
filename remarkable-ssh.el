@@ -2,13 +2,6 @@
 
 ;; Copyrighqt (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
-;; Author: Simon Dobson <simoninireland@gmail.com>
-;; Maintainer: Simon Dobson <simoninireland@gmail.com>
-;; Version: 0.1.1
-;; Keywords: hypermedia, multimedia
-;; Homepage: https://github.com/simoninireland/remarkable
-;; Package-Requires: ((emacs "27.2") (org "8.0") (org-roam)
-
 ;; This file is NOT part of GNU Emacs.
 ;;
 ;; GNU Emacs is free software: you can redistribute it and/or modify
@@ -42,25 +35,69 @@
 
 ;; ---------- Helper functions ----------
 
-(cl-defun remarkable--tramp-docstore-path (&optional (p ""))
+(cl-defun remarkable-ssh--tramp-docstore-path (&optional (p ""))
   "Return the Tramp path to a fle P in the document store.
 
 The path is to the root of the document store if P is nil."
-  (format "/sshx:%s@%s:%s%s"
-	  remarkable--ssh-user
-	  remarkable--ssh-host
-	  remarkable--ssh-docstore-path p))
+  (format "/sshx:%1$s@%2$s:/home/%1$s/%3$s%4$s"
+	  remarkable-ssh--user
+	  remarkable-ssh--host
+	  remarkable-ssh--docstore-path p))
+
+
+(defun remarkable-ssh--metadata-file-name-for-uuid (uuid)
+  "Return the name of the metadata file for the document UUID."
+  (f-join (remarkable-ssh--tramp-docstore-path) (format "%s%s" uuid ".metadata")))
 
 
 ;; ---------- Index handling ----------
 
 (defun remarkable-ssh--get-root-index ()
-  "Retrieve the root index, returning a hierarchy."
-  (cl-flet ((subfiles (uuid)
-	      "Return the number of sub-files for document UUID.")))
-  (let ((dirs (f-directories remarkable--ssh-docstore-path))))
+  "Return the root index as a hierarchy,"
+  (let* ((bare (remarkable-ssh--get-bare-root-index))
+	 (meta (remarkable-ssh--add-metadata bare)))
+    (remarkable--make-collection-hierarchy meta)))
 
-  )
+
+(defun remarkable-ssh--get-bare-root-index ()
+  "Retrieve the bare root index.
+
+This is just a list of entries containing only the ':uuid'
+property, created by finding all the mnetadata files in the
+document store."
+  (let* ((fns (f-files (remarkable-ssh--tramp-docstore-path "/")))
+	 (entries (-filter (lambda (f) (f-ext? f "metadata")) fns))
+	 (uuids (mapcar #'f-base entries)))
+    (mapcar (lambda (uuid)
+	      (list :uuid uuid))
+	    uuids)))
+
+
+(defun remarkable-ssh--add-metadata (es)
+  "Add metadata to the entries in ES.
+
+This parses the metadata and destructively adds it to the
+':metadata' property of each entry in ES."
+  (mapc (lambda (e)
+	  (let* ((uuid (remarkable-entry-uuid e))
+		 (metadata (remarkable-ssh--get-metadata uuid)))
+	    (plist-put e :metadata metadata)))
+	es))
+
+
+(defun remarkable-ssh--get-metadata (uuid)
+  "Return the metadata associated with document UUID.
+
+The metadata is read from the JSON stored in the associated
+metadata file, as identified by
+`remarkable-ssh--metadata-file-name-for-uuid'."
+  (let ((mfn (remarkable-ssh--metadata-file-name-for-uuid uuid)))
+    (if-let ((raw-metadata (with-temp-buffer
+			     (info-insert-file-contents mfn)
+			     (buffer-string))))
+	(json-parse-string raw-metadata
+			   :object-type 'plist)
+      (error "Couldn't load metadata from %s" mfn))))
 
 
 ;; ---------- Uploading API ----------

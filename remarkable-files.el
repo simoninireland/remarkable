@@ -30,128 +30,105 @@
 
 ;;; Code:
 
-(require 'f)
-(require 'org)
-
 
 ;; ---------- File name patterns ----------
 
-(defconst remarkable--content-ext ".content"
+(defconst remarkable--content-ext "content"
   "Extension for the content file, which mainly holds display metadata.")
 
-(defconst remarkable--metadata-ext ".metadata"
+(defconst remarkable--metadata-ext "metadata"
   "Extension for the metadata file.")
 
-(defconst remarkable--pagedata-ext ".pagedata"
+(defconst remarkable--pagedata-ext "pagedata"
   "Extension for the page data file.")
 
-(defconst remarkable--thumbnails-ext ".thumbnails"
+(defconst remarkable--thumbnails-ext "thumbnails"
   "Extension for the thumbnail image directory.")
 
-(defconst remarkable--localdata-ext ".local"
+(defconst remarkable--localdata-ext "local"
   "Extension for the local data file.")
 
-(defconst remarkable--pdf-ext ".pdf"
+(defconst remarkable--pdf-ext "pdf"
   "Extension for PDF files.")
 
-(defconst remarkable--epub-ext ".epub"
+(defconst remarkable--epub-ext "epub"
   "Extension for EPUB files.")
 
 
-;; ---------- Helper functions ----------
+;; ---------- Document archives ----------
 
-(defun remarkable--create-uuid ()
-  "Create a new UUID for a document.
+(defun remarkable--filename-to-name (fn)
+  "Convert a filename FN into something hopefully more readable.
 
-We simply re-use the org function `org-id-uuid'."
-  (org-id-uuid))
-
-
-(cl-defun remarkable--timestamp (&optional ts)
-  "Return the table timestamp for the time TS.
-
-TS may be in any form accepted by `time-convert'. If omitted,
-use the current time."
-  (* (time-convert ts 'integer) 1000))
+This relies on the name being meaningful in some sense. We
+strip the extension and replace underscores with spaces.
+(Should probably capitalise as well.)"
+  (let* ((stem (file-name-sans-extension (f-filename fn)))
+	 (spaced (string-replace "_" " " stem)))
+    spaced))
 
 
-(cl-defun remarkable--file-name (uuid &optional type)
-  "Rertun the file name for UUID with given TYPE.
-
-TYPE should be an extension, including the leading '.'.
-It can be omitted for file names without extensions."
-  (unless type
-    (setq type ""))
-  (remarkable--tramp-doc-store-path (concat "/"  uuid type)))
-
-
-;; ---------- Metadata abd other files ----------
-
-(defun remarkable--create-metadata (uuid name)
-  "Create metadata for the document UUID named NAME."
-  (let* ((now (remarkable--timestamp))
-	 (meta (list (cons "type" "DocumentType")
-		     (cons "deleted" "false")
-		     (cons "lastModified" now)
-		     (cons "lastOpened" 0)
-		     (cons "lastOpenedPage" 0)
-		     (cons "modified" "false")
-		     (cons "metadataModified" "false")
-		     (cons "parent" "")
-		     (cons "pinned" "false")
-		     (cons "synced" "false")
-		     (cons "version" 0)
-		     (cons "visibleName" name)))
-	 (fn (remarkable--file-name uuid remarkable--metadata-ext)))
-    (with-temp-buffer
-      (set-visited-file-name fn)
-      (insert (json-encode meta))
-      (json-pretty-print-buffer)
-      (basic-save-buffer))))
+(defun remarkable--create-metadata-plist (fn parent)
+  "Create a metadata plist for FN going into PARENT."
+  (let ((now (remarkable--lisp-timestamp (current-time))))
+    (list :visibleName (remarkable--filename-to-name fn)
+	  :type "DocumentType"
+	  :parent parent
+	  :version 0
+	  :createdTime "0"
+	  :lastModified now
+	  :lastOpened ""
+	  :lastOpenedPage 0
+	  :synced t
+	  :pinned :json-false
+	  :modified :json-false
+	  :deleted :json-false
+	  :metadatamodified :json-false)))
 
 
-(defun remarkable--create-localdata (uuid)
-  "Create local data for the document UUID."
-  (let ((fn (remarkable--file-name uuid remarkable--localdata-ext)))
-    (with-temp-buffer
-      (set-visited-file-name fn)
-      (insert "{}")
-      (basic-save-buffer))))
+(defun remarkable--create-content-plist (fn)
+  "Create the content description for a document FN."
+  (let ((length (f-length fn))
+	(ext (f-ext fn)))
+    (list :dummyDocument :json-false
+	  :fileType ext
+	  :extraMetadata (list :LastBrushColor ""
+			       :LastBrushThicknessScale: ""
+			       :LastColor ""
+			       :LastEraserThicknessScale ""
+			       :LastEraserTool ""
+			       :LastPen "Finelinerv2"
+			       :LastPenColor ""
+			       :LastPenThicknessScale ""
+			       :LastPencil ""
+			       :LastPencilThicknessScale ""
+			       :LastTool "Finelinerv2"
+			       :ThicknessScale ""
+			       :LastFinelinerv2Size "1")
+	  :fontName ""
+	  :lastOpenedPage 0
+	  :lineHeight -1
+	  :margins 180
+	  :orientation ""
+	  :pageCount 0
+	  :textScale 1
+	  :pages :json-null
+	  :redirectionPageMap :json-null
+	  :pageTags :json-null
+	  :transform (list :m11 1
+			   :m12 0
+			   :m13 0
+			   :m21 0
+			   :m22 1
+			   :m23 0
+			   :m31 0
+			   :m32 0
+			   :m33 1))))
 
 
-(defun remarkable--create-content (uuid)
-  "Create content file for the document UUID.
-
-Currently blank."
-  (let ((fn (remarkable--file-name uuid remarkable--content-ext)))
-    (with-temp-buffer
-      (set-visited-file-name fn)
-      (basic-save-buffer))))
-
-
-;; ---------- Create PDF file ----------
-
-(defun remarkable--create-pdf (pdf name)
-  "Copy PDF to the tablet under named NAME.
-
-This creates the necessary metadata and other files and directories.
-Not all are properly filled-in.
-
-Returns the UUID of the new document."
-  (let ((uuid (remarkable--create-uuid)))
-    ;; create epty directory
-    (f-mkdir-full-path (remarkable--file-name uuid))
-
-    ;; create file
-    (f-copy pdf (remarkable--file-name uuid remarkable--pdf-ext))
-
-    ;; create metadata and other files
-    (remarkable--create-metadata uuid name)
-    (remarkable--create-localdata uuid)
-    ;(remarkable--create-content uuid)
-
-    (message (format "Created \"%s\" with UUID %s" name uuid))
-    uuid))
+(defun remarkable--create-pagedata (fn ext)
+    "Create the page data for FN with type EXT"
+    "\n")
 
 
 (provide 'remarkable-files)

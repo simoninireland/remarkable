@@ -27,7 +27,7 @@
 ;;; Commentary:
 
 ;; remarkable provides a link between Emacs (and specifically org and org-roam)
-;; and the ReMarkable tablet (https://remarkable.com).
+;; and the reMarkable tablet (https://remarkable.com).
 
 ;;; Code:
 
@@ -43,6 +43,9 @@
 
 ;; Entries
 (require 'remarkable-entries)
+
+;; File structures
+(require 'remarkable-files)
 
 ;; JSON Web Token parsing
 ;;(require 'jwt)

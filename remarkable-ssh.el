@@ -21,10 +21,6 @@
 
 ;; An API based on having ssh access to the ReMarkable tablet.
 ;; This should work both over wifi and over a local USB network.
-;;
-;; The API builds a metadata alist for all the documents on the
-;; tablet. Optionally it can also build a document tree reflecting
-;; the folder structure.
 
 ;;; Code:
 
@@ -47,7 +43,7 @@ The path is to the root of the document store if P is nil."
 
 (defun remarkable-ssh--metadata-file-name-for-uuid (uuid)
   "Return the name of the metadata file for the document UUID."
-  (f-join (remarkable-ssh--tramp-docstore-path) (format "%s%s" uuid ".metadata")))
+  (f-join (remarkable-ssh--tramp-docstore-path) (format "%s%s" uuid "." remarkable--metadata-ext)))
 
 
 ;; ---------- Index handling ----------
@@ -66,7 +62,7 @@ This is just a list of entries containing only the ':uuid'
 property, created by finding all the mnetadata files in the
 document store."
   (let* ((fns (f-files (remarkable-ssh--tramp-docstore-path "/")))
-	 (entries (-filter (lambda (f) (f-ext? f "metadata")) fns))
+	 (entries (-filter (lambda (f) (f-ext? f remarkable--metadata-ext)) fns))
 	 (uuids (mapcar #'f-base entries)))
     (mapcar (lambda (uuid)
 	      (list :uuid uuid))

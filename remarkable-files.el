@@ -126,9 +126,46 @@ strip the extension and replace underscores with spaces.
 			   :m33 1))))
 
 
-(defun remarkable--create-pagedata (fn ext)
-    "Create the page data for FN with type EXT"
-    "\n")
+(cl-defun remarkable--create-subfiles (fn uuid dir &key parent title)
+  "Create the sub-files for file FN in DIR with the given UUID.
+
+The metadata can be altered using PARENT and TITLE.
+
+Return the metadata and a list of sub-files consisting of the content
+sub-file, metadata sub0file, and any others created, in that order."
+  ;; check the parent exists and is a collection
+  (if (not (or (null parent)
+	       (equal parent "")))
+      (let ((p (remarkable--find-entry parent remarkable--root-hierarchy)))
+	(if (null p)
+	    ;; parent doesn't exist
+	    (error "Parent %s doesn't exist" parent)
+
+	  (if (not (remarkable-entry-is-collection? p))
+	      (error "Parent %s is not a collection" parent)))))
+
+  ;; create metadata and content sub-files
+  (let* ((ext (f-ext fn))
+	 (content-fn (f-swap-ext (f-join dir uuid) ext))
+	 (metadata-fn (f-swap-ext (f-join dir uuid) remarkable--metadata-ext))
+	 (metacontent-fn (f-swap-ext (f-join dir uuid) remarkable--content-ext))
+	 (metadata (remarkable--create-metadata-plist fn parent))
+	 (metacontent (remarkable--create-content-plist fn)))
+
+    ;; set title if supplied
+    (if title
+	(plist-put metadata :visibleName title))
+
+    ;; create the metadata files of different kinds
+    (remarkable--create-json-file metadata-fn metadata)
+    (remarkable--create-json-file metacontent-fn metacontent)
+
+    ;; copy in content file (this makes file name handling easier)
+    (f-copy fn content-fn)
+
+    ;; return the metadata and the sub-files
+    (list metadata
+	  (list content-fn metadata-fn metacontent-fn))))
 
 
 (provide 'remarkable-files)

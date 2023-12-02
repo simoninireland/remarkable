@@ -852,36 +852,6 @@ Return the hash of the uploaded document."
 	    remarkable--generation newgen))))
 
 
-(cl-defun remarkable--create-subfiles (fn uuid dir &key parent title)
-  "Create the sub-files for file FN in DIR with the given UUID.
-
-The metadata can be altered using PARENT and TITLE.
-
-Return the metadata and a list of sub-files consisting of the content
-sub-file, metadata sub0file, and any others created."
-  (let* ((ext (f-ext fn))
-	 (content-fn (f-swap-ext (f-join dir uuid) ext))
-	 (metadata-fn (f-swap-ext (f-join dir uuid) "metadata"))
-	 (metacontent-fn (f-swap-ext (f-join dir uuid) "content"))
-	 (metadata (remarkable--create-metadata-plist fn parent))
-	 (metacontent (remarkable--create-content-plist fn)))
-
-    ;; set title if supplied
-    (if title
-	(plist-put metadata :visibleName title))
-
-    ;; create the metadata files of different kinds
-    (remarkable--create-json-file metadata-fn metadata)
-    (remarkable--create-json-file metacontent-fn metacontent)
-
-    ;; copy in content file (this makes file name handling easier)
-    (f-copy fn content-fn)
-
-    ;; return the metadata and sub-files
-    (list metadata
-	  (list content-fn metadata-fn metacontent-fn))))
-
-
 (cl-defun remarkable--upload-document (fn &key parent title)
   "Upload document FN to given PARENT.
 
@@ -892,28 +862,13 @@ document."
 	 (tmp (remarkable--create-temporary-directory-name uuid)))
     (unwind-protect
 	(progn
-	  ;; check the parent exists and is a collection
-	  (if (not (or (null parent)
-		       (equal parent "")))
-	      (let ((p (remarkable--find-entry parent remarkable--root-hierarchy)))
-		(if (null p)
-		    ;; parent doesn't exist
-		    (error "Parent %s doesn't exist" parent)
-
-		  (if (not (remarkable-entry-is-collection? p))
-		      (error "Parent %s is not a collection" parent)))))
-
-	  ;; set title if supplied
-	  (if title
-	      (plist-put metadata :visibleName title))
-
 	  ;; create temporary directory
 	  (f-mkdir-full-path tmp)
 
 	  ;; create the metadata and sub-files
 	  (cl-destructuring-bind (metadata fns)
 	      (remarkable--create-subfiles fn uuid tmp
-					   :parant parent
+					   :parent parent
 					   :title title)
 
 	    ;; upload the document and its sub-files

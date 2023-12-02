@@ -44,8 +44,8 @@
 
 ;; ---------- ssh access ----------
 
-(defcustom remarkable-ssh--docstore-path "~/.local/share/remarkable/xochitl"
-  "Path to the document store on the reMarkable tablet."
+(defcustom remarkable-ssh--docstore-path ".local/share/remarkable/xochitl"
+  "Relative path to the document store on the reMarkable tablet."
   :group 'Remarkable
   :type 'string)
 
@@ -54,7 +54,7 @@
   :group 'Remarkable
   :type 'string)
 
-(defcustom remarkable--ssh-host "remarkable.local"
+(defcustom remarkable-ssh--host "remarkable"
   "Name of the reMarkable tablet as seen from the client.
 
 This will typically be an entry in the local DNS. It can also

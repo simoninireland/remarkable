@@ -282,7 +282,7 @@ entry. EXTRAFILES is the set of additional files created
 alongside the metadata and the raw content."
   (let ((len (f-length fn)))
     (list :hash hash
-	  :type remarkable--index-file-type
+	  ;;:type remarkable--index-file-type
 	  :uuid uuid
 	  :subfiles (+ 2 (length extrafiles)) ;; content + metadata + others
 	  :length len

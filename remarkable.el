@@ -31,23 +31,28 @@
 
 ;;; Code:
 
-;; JSON Web Token parsing
-(require 'jwt)
-
 ;; Customisation options
 (require 'remarkable-custom)
 
 ;; Utility functions
 (require 'remarkable-utils)
-(require 'remarkable-bindat-floats)
+;;(require 'remarkable-bindat)
 
 ;; Cache file handling
 (require 'remarkable-cache)
 
+;; Entries
+(require 'remarkable-entries)
+
+;; JSON Web Token parsing
+;;(require 'jwt)
+
 ;; Cloud API
-(require 'remarkable-cloud-auth)
-(require 'remarkable-cloud-sync15)
-;;(require remarkable-ssh)
+;;(require 'remarkable-cloud-auth)
+;;(require 'remarkable-cloud-sync15)
+
+;; ssh (USB and local network) API
+(require remarkable-ssh)
 
 ;; Format conversion
 

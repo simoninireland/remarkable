@@ -35,8 +35,12 @@
 
 ;; ---------- User-level interaction ----------
 
-(defun remarkable-mode--show-buffer ()
-  "Show a file buffer."
+
+
+;; ---------- Display functions ----------
+
+(defun remarkable-mode--show-buffer (es)
+  "Show a file buffer for the (possibly hierarchical) entries in ES."
   (interactive)
   (let ((buf (get-buffer-create remarkable-mode--buffer-name)))
     (set-buffer buf)
@@ -46,7 +50,7 @@
       (erase-buffer)
 
       ;; insert files
-      (remarkable-mode--create-file-list remarkable--root-hierarchy)
+      (remarkable-mode--create-file-list es)
       (goto-char (point-min)))
 
     ;; make buffer read-only and mark as unmodified
@@ -59,8 +63,6 @@
     ;; display the buffer
     (display-buffer buf)))
 
-
-;; ---------- Display functions ----------
 
 (defun remarkable-mode--make-indent (n)
   "Return an N-character indent of spaces."

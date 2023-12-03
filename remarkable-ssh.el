@@ -32,7 +32,7 @@
 ;; ---------- Helper functions ----------
 
 (cl-defun remarkable-ssh--tramp-docstore-path (&optional (p ""))
-  "Return the Tramp path to a fle P in the document store.
+  "Return the Tramp path to a file P in the document store.
 
 The path is to the root of the document store if P is nil."
   (f-join (format "/sshx:%1$s@%2$s:/home/%1$s/%3$s"
@@ -45,6 +45,40 @@ The path is to the root of the document store if P is nil."
 (defun remarkable-ssh--metadata-file-name-for-uuid (uuid)
   "Return the name of the metadata file for the document UUID."
   (remarkable-ssh--tramp-docstore-path (concat uuid "." remarkable--metadata-ext)))
+
+
+;; We don't seem to be able to use `f-copy' or `f-mkdir' to operate on
+;; the tablet over a Tramp connection, so instead we explicitly spawn
+;; a shell process to do the job.
+;;
+;; Both processes are synchronous. 'call-process' runs locally;
+;; `process-file' runs in a remote Tramp-specified directory.
+
+(cl-defun remarkable-ssh--scp-docstore-path (&optional (p ""))
+  "Return the 'scp' path to a file P in the document store.
+
+This is just the Tramp file path without the leading '/sshx:'.
+The path is to the root of the document store if P is nil."
+  (f-join (format "%1$s@%2$s:/home/%1$s/%3$s"
+		  remarkable-ssh--user
+		  remarkable-ssh--host ;; used twice in the path
+		  remarkable-ssh--docstore-path)
+	  p))
+
+
+(defun remarkable-ssh--upload-file (fn)
+  "Upload FN to the tablet's docstore."
+  (let ((tdir (remarkable-ssh--scp-docstore-path)))
+    (message (format "Copying file %s to tablet %s" (f-filename fn) tdir))
+    (call-process "scp" nil nil nil fn tdir)))
+
+
+(defun remarkable-ssh--create-directory (dir)
+  "Create a directory DIR in the tablet's docstore."
+  (let ((default-directory (remarkable-ssh--tramp-docstore-path))
+	(tdir (f-filename dir)))
+    (message (format "Creating tablet directory %s" tdir))
+    (process-file "/bin/sh" nil nil nil "-c" (format "mkdir %s" tdir))))
 
 
 ;; ---------- Index handling ----------
@@ -99,24 +133,6 @@ metadata file, as identified by
 
 ;; ---------- Uploading API ----------
 
-(defun remarkable-ssh--upload-file (fn)
-  "Upload FN to the tablet's docstore."
-  (let ((tfn (remarkable-ssh--tramp-docstore-path (f-base fn))))
-    (f-copy fn tfn)))
-
-
-(defun remarkable-ssh--create-directory (dir)
-  "Create a directory DIR in the tablet's docstore.
-
-We don't seem to be able to use `f-mkdir' to do this over a Tramp
-connection, so instead we explicitly spawn a remote process to do
-the job."
-  (let ((default-directory (remarkable-ssh--tramp-docstore-path))
-	(dir (f-base dir)))
-    (with-temp-buffer
-      (start-file-process "mkdir" (current-buffer) "/bin/sh" "-c" (format "mkdir %s" dir)))))
-
-
 (cl-defun remarkable-ssh--upload-document (fn hier &key parent title)
   "Upload document FN to given PARENT, adding the resulting entry to HIER.
 
@@ -127,6 +143,7 @@ document."
 	 (tmp (remarkable--create-temporary-directory-name uuid)))
     (unwind-protect
 	(progn
+	  (print uuid)
 	  ;; create temporary directory
 	  (f-mkdir-full-path tmp)
 
@@ -150,6 +167,9 @@ document."
 						other-fns))
 		   (newhier (remarkable--add-entry e hier)))
 
+	      ;; complete synchronisation
+	      (remarkable-ssh--upload-complete)
+
 	      ;; return the UUID of the newly-created document
 	      ;;and the new hierarchy of entries containing this
 	      ;; document
@@ -163,10 +183,12 @@ document."
 (defun remarkable-ssh--upload-complete ()
   "Signal the end of an uploading.
 
-This re-starts the main xochitl process to refresh the
-view of the tablet's documents."
-  (let ((default-directory (remarkable-ssh--tramp-docstore-path)))
-    (process-file remarkable-ssh--sync-command)))
+This runs the `remarkable-ssh--sync-command' to re-start the
+main xochitl UI process and refresh the view of the tablet's
+documents."
+  (let ((default-directory (remarkable-ssh--tramp-docstore-path))
+	(parts (s-split " " remarkable-ssh--sync-command)))
+    (apply #'process-file (append (list (car parts) nil nil nil) (cdr parts)))))
 
 
 (provide 'remarkable-ssh)

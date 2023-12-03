@@ -57,13 +57,8 @@ The path is to the root of the document store if P is nil."
 (cl-defun remarkable-ssh--scp-docstore-path (&optional (p ""))
   "Return the 'scp' path to a file P in the document store.
 
-This is just the Tramp file path without the leading '/sshx:'.
-The path is to the root of the document store if P is nil."
-  (f-join (format "%1$s@%2$s:/home/%1$s/%3$s"
-		  remarkable-ssh--user
-		  remarkable-ssh--host ;; used twice in the path
-		  remarkable-ssh--docstore-path)
-	  p))
+This is just the Tramp file path without the leading '/sshx:'."
+  (s-replace-regexp (rx (seq bol "/ssh" (? "x") ":")) "" (remarkable-ssh--tramp-docstore-path p)))
 
 
 (defun remarkable-ssh--upload-file (fn)

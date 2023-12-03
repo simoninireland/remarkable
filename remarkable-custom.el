@@ -62,6 +62,11 @@ be an IP address to access the tablet over USB."
   :group 'Remarkable
   :type 'string)
 
+(defcustom remarkable-ssh--sync-command "systemctl restart xochitl"
+  "Command run on the reMarkable tablet to end a synchronisation."
+  :group 'Remarkable
+  :type 'string)
+
 
 ;; ---------- Agent strings ----------
 

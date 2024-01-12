@@ -64,6 +64,11 @@ ssh can be invoked without needing passwords.")
       cache)))
 
 
+(cl-defmethod remarkable-sync ((conn remarkable-ssh-connection))
+  ;; not yet implemented
+ )
+
+
 (cl-defmethod remarkable-put ((conn remarkable-ssh-connection) fn &key title collection tags)
   (with-slots (cache) conn
     (cl-destructuring-bind (uuid newhier)
@@ -127,10 +132,25 @@ This is just the Tramp file path without the leading '/sshx:'."
     (process-file "/bin/sh" nil nil nil "-c" (format "mkdir %s" tdir))))
 
 
+(defun remarkable-ssh--list-document-uuids (conn)
+  "List all the document UUIDs on the tablet CONN.
+
+The documents are identified as all the metadata files, and may be
+documents or folders."
+  (let* ((default-directory (remarkable-ssh--tramp-docstore-path conn))
+	 (fns (with-temp-buffer
+	       (process-file "/bin/sh" nil t nil "-c" "ls")
+	       (butlast (split-string (buffer-string) "\n"))))
+	 (metafns (-filter (lambda (fn)
+			     (equal (f-ext fn) remarkable--metadata-ext))
+			   fns)))
+    (mapcar #'file-name-sans-extension metafns)))
+
+
 ;; ---------- Index handling ----------
 
 (defun remarkable-ssh--get-root-index (conn)
-  "Return the root index on the tablte connected to with CONN as a hierarchy,"
+  "Return the root index on the tablet connected to with CONN as a hierarchy,"
   (let* ((bare (remarkable-ssh--get-bare-root-index conn))
 	 (meta (remarkable-ssh--add-metadata conn bare)))
     (remarkable--make-collection-hierarchy meta)))
@@ -142,9 +162,7 @@ This is just the Tramp file path without the leading '/sshx:'."
 This is just a list of entries containing only the ':uuid'
 property, created by finding all the metadata files in the
 document store."
-  (let* ((fns (f-files (remarkable-ssh--tramp-docstore-path conn)))
-	 (entries (-filter (lambda (f) (f-ext? f remarkable--metadata-ext)) fns))
-	 (uuids (mapcar #'f-base entries)))
+  (let* ((uuids (remarkable-ssh--list-document-uuids conn)))
     (mapcar (lambda (uuid)
 	      (list :uuid uuid))
 	    uuids)))
@@ -205,10 +223,10 @@ document."
 	    (mapc (lambda (fn) (remarkable-ssh--upload-file conn fn)) fns)
 
 	    ;; add an entry to the hierarchy
-	    (let* ((content-fn (car fns))  ; first sub-file is always the raw contents
-		   (other-fns (cddr fns))  ; other sub-files excluding metadata
+	    (let* ((content-fn (car fns)) ; first sub-file is always the raw contents
+		   (other-fns (cddr fns)) ; other sub-files excluding metadata
 		   (e (remarkable--create-entry content-fn uuid
-						0               ; ignore hashes for now
+						0 ; ignore hashes for now
 						metadata
 						other-fns))
 		   (newhier (remarkable--add-entry e hier)))

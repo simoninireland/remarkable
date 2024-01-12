@@ -1,6 +1,6 @@
-;;; remarkable-ssh.el --- ReMarkable by wifi -*- lexical-binding: t -*-
+;;; remarkable-ssh.el --- ReMarkable by USB or wifi -*- lexical-binding: t -*-
 
-;; Copyrighqt (c) 2023 Simon Dobson <simoninireland@gmail.com>
+;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
 
 ;; This file is NOT part of GNU Emacs.
 ;;
@@ -29,22 +29,66 @@
 (require 'json)
 
 
+;; ---------- ssh connection ----------
+
+(defclass remarkable-ssh-connection (remarkable-connection)
+  ((name-or-ip-address :initarg :target))
+  "An ssh-based connection to the reMarkable tablet.
+
+This connection works over wifi (to a tablet identified by its
+DNS name or IP address) or over USB to a tablet connected
+directly to this computer.
+
+We assume that ssh key access is set-up to the tablet, so that
+ssh can be invoked without needing passwords.")
+
+
+(cl-defmethod remarkable-save ((conn remarkable-ssh-connection))
+  (let ((details `(:name-or-ip-address ,(slot-value conn 'name-or-ip-address))))
+    (print details (current-buffer))
+    (print (slot-value conn 'cache) (current-buffer))))
+
+
+(cl-defmethod remarkable-load ((conn remarkable-ssh-connection))
+  (let ((details (read (current-buffer)))
+	(cache (read (current-buffer))))
+    (setf (slot-value conn 'name-or-ip-address) (plist-get details :name-or-ip-address))
+    (setf (slot-value conn  'cache) cache)))
+
+
+(cl-defmethod remarkable-index ((conn remarkable-ssh-connection))
+  (let ((hier (remarkable-ssh--get-root-index conn)))
+    (with-slots (cache) conn
+      (setf cache hier)
+      (message "Retrieved tablet index")
+      cache)))
+
+
+(cl-defmethod remarkable-put ((conn remarkable-ssh-connection) fn &key title collection tags)
+  (with-slots (cache) conn
+    (cl-destructuring-bind (uuid newhier)
+	(remarkable-ssh--upload-document conn fn cache :parent collection :title title)
+      (setf cache newhier)
+      (message "Uploaded document %s" fn)
+      uuid)))
+
+
 ;; ---------- Helper functions ----------
 
-(cl-defun remarkable-ssh--tramp-docstore-path (&optional (p ""))
-  "Return the Tramp path to a file P in the document store.
+(cl-defun remarkable-ssh--tramp-docstore-path (conn &optional (p ""))
+  "Return the Tramp path to a file P in the document store of CONN.
 
 The path is to the root of the document store if P is nil."
   (f-join (format "/sshx:%1$s@%2$s:/home/%1$s/%3$s"
 		  remarkable-ssh--user
-		  remarkable-ssh--host ;; used twice in the path
+		  (slot-value conn 'name-or-ip-address) ;; used twice in the path
 		  remarkable-ssh--docstore-path)
 	  p))
 
 
-(defun remarkable-ssh--metadata-file-name-for-uuid (uuid)
-  "Return the name of the metadata file for the document UUID."
-  (remarkable-ssh--tramp-docstore-path (concat uuid "." remarkable--metadata-ext)))
+(defun remarkable-ssh--metadata-file-name-for-uuid (conn uuid)
+  "Return the name of the metadata file for the document UUID on CONN."
+  (remarkable-ssh--tramp-docstore-path conn (concat uuid "." remarkable--metadata-ext)))
 
 
 ;; We don't seem to be able to use `f-copy' or `f-mkdir' to operate on
@@ -54,23 +98,30 @@ The path is to the root of the document store if P is nil."
 ;; Both processes are synchronous. 'call-process' runs locally;
 ;; `process-file' runs in a remote Tramp-specified directory.
 
-(cl-defun remarkable-ssh--scp-docstore-path (&optional (p ""))
+(cl-defun remarkable-ssh--scp-docstore-path (conn &optional (p ""))
   "Return the 'scp' path to a file P in the document store.
 
 This is just the Tramp file path without the leading '/sshx:'."
-  (s-replace-regexp (rx (seq bol "/ssh" (? "x") ":")) "" (remarkable-ssh--tramp-docstore-path p)))
+  (s-replace-regexp (rx (seq bol "/ssh" (? "x") ":")) "" (remarkable-ssh--tramp-docstore-path conn p)))
 
 
-(defun remarkable-ssh--upload-file (fn)
+(defun remarkable-ssh--upload-file (conn fn)
   "Upload FN to the tablet's docstore."
-  (let ((tdir (remarkable-ssh--scp-docstore-path)))
+  (let ((tdir (remarkable-ssh--scp-docstore-path conn)))
     (message (format "Copying file %s to tablet %s" (f-filename fn) tdir))
     (call-process "scp" nil nil nil fn tdir)))
 
 
-(defun remarkable-ssh--create-directory (dir)
-  "Create a directory DIR in the tablet's docstore."
-  (let ((default-directory (remarkable-ssh--tramp-docstore-path))
+(defun remarkable-ssh--download-document (conn uuid tmp)
+  "Download all the sub-files of document UUID on CONN to directory TMP."
+  (let ((sdir (remarkable-ssh--scp-docstore-path conn uuid)))
+    (message (format "Copying files for %s (%s) to %s" uuid sdir tmp))
+    (call-process "scp" nil nil nil (format "%s/*" sdir) tmp)))
+
+
+(defun remarkable-ssh--create-directory (conn dir)
+  "Create a directory DIR in the tablet CONN's docstore."
+  (let ((default-directory (remarkable-ssh--tramp-docstore-path conn))
 	(tdir (f-filename dir)))
     (message (format "Creating tablet directory %s" tdir))
     (process-file "/bin/sh" nil nil nil "-c" (format "mkdir %s" tdir))))
@@ -78,20 +129,20 @@ This is just the Tramp file path without the leading '/sshx:'."
 
 ;; ---------- Index handling ----------
 
-(defun remarkable-ssh--get-root-index ()
-  "Return the root index as a hierarchy,"
-  (let* ((bare (remarkable-ssh--get-bare-root-index))
-	 (meta (remarkable-ssh--add-metadata bare)))
+(defun remarkable-ssh--get-root-index (conn)
+  "Return the root index on the tablte connected to with CONN as a hierarchy,"
+  (let* ((bare (remarkable-ssh--get-bare-root-index conn))
+	 (meta (remarkable-ssh--add-metadata conn bare)))
     (remarkable--make-collection-hierarchy meta)))
 
 
-(defun remarkable-ssh--get-bare-root-index ()
-  "Retrieve the bare root index.
+(defun remarkable-ssh--get-bare-root-index (conn)
+  "Retrieve the bare root index from CONN.
 
 This is just a list of entries containing only the ':uuid'
-property, created by finding all the mnetadata files in the
+property, created by finding all the metadata files in the
 document store."
-  (let* ((fns (f-files (remarkable-ssh--tramp-docstore-path "/")))
+  (let* ((fns (f-files (remarkable-ssh--tramp-docstore-path conn)))
 	 (entries (-filter (lambda (f) (f-ext? f remarkable--metadata-ext)) fns))
 	 (uuids (mapcar #'f-base entries)))
     (mapcar (lambda (uuid)
@@ -99,25 +150,25 @@ document store."
 	    uuids)))
 
 
-(defun remarkable-ssh--add-metadata (es)
-  "Add metadata to the entries in ES.
+(defun remarkable-ssh--add-metadata (conn es)
+  "Add metadata to the entries in ES from CONN.
 
 This parses the metadata and destructively adds it to the
 ':metadata' property of each entry in ES."
   (mapc (lambda (e)
 	  (let* ((uuid (remarkable-entry-uuid e))
-		 (metadata (remarkable-ssh--get-metadata uuid)))
+		 (metadata (remarkable-ssh--get-metadata conn uuid)))
 	    (plist-put e :metadata metadata)))
 	es))
 
 
-(defun remarkable-ssh--get-metadata (uuid)
-  "Return the metadata associated with document UUID.
+(defun remarkable-ssh--get-metadata (conn uuid)
+  "Return the metadata associated with document UUID on CONN.
 
 The metadata is read from the JSON stored in the associated
 metadata file, as identified by
 `remarkable-ssh--metadata-file-name-for-uuid'."
-  (let ((mfn (remarkable-ssh--metadata-file-name-for-uuid uuid)))
+  (let ((mfn (remarkable-ssh--metadata-file-name-for-uuid conn uuid)))
     (if-let ((raw-metadata (with-temp-buffer
 			     (info-insert-file-contents mfn)
 			     (buffer-string))))
@@ -128,8 +179,8 @@ metadata file, as identified by
 
 ;; ---------- Uploading API ----------
 
-(cl-defun remarkable-ssh--upload-document (fn hier &key parent title)
-  "Upload document FN to given PARENT, adding the resulting entry to HIER.
+(cl-defun remarkable-ssh--upload-document (conn fn hier &key parent title)
+  "Upload document FN to given PARENT on CONN, adding the resulting entry to HIER.
 
 If PARENT is omitted the document goes to the root collection.
 If TITLE is supplied it is used as the visible name for the
@@ -148,10 +199,10 @@ document."
 					   :title title)
 
 	    ;; create the empty marker directory
-	    (remarkable-ssh--create-directory uuid)
+	    (remarkable-ssh--create-directory conn uuid)
 
 	    ;; upload the document and its sub-files
-	    (mapc #'remarkable-ssh--upload-file fns)
+	    (mapc (lambda (fn) (remarkable-ssh--upload-file conn fn)) fns)
 
 	    ;; add an entry to the hierarchy
 	    (let* ((content-fn (car fns))  ; first sub-file is always the raw contents
@@ -163,7 +214,7 @@ document."
 		   (newhier (remarkable--add-entry e hier)))
 
 	      ;; complete synchronisation
-	      (remarkable-ssh--upload-complete)
+	      (remarkable-ssh--upload-complete conn)
 
 	      ;; return the UUID of the newly-created document
 	      ;;and the new hierarchy of entries containing this
@@ -175,13 +226,13 @@ document."
 	  (f-delete tmp t)))))
 
 
-(defun remarkable-ssh--upload-complete ()
-  "Signal the end of an uploading.
+(defun remarkable-ssh--upload-complete (conn)
+  "Signal the end of uploading to CONN.
 
 This runs the `remarkable-ssh--sync-command' to re-start the
 main xochitl UI process and refresh the view of the tablet's
 documents."
-  (let ((default-directory (remarkable-ssh--tramp-docstore-path))
+  (let ((default-directory (remarkable-ssh--tramp-docstore-path conn))
 	(parts (s-split " " remarkable-ssh--sync-command)))
     (apply #'process-file (append (list (car parts) nil nil nil) (cdr parts)))))
 

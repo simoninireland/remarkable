@@ -1,6 +1,6 @@
 ;;; remarkable-cache.el --- Cache management -*- lexical-binding: t -*-
 
-;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
+;; Copyright (c) 2023--2024 Simon Dobson <simoninireland@gmail.com>
 
 ;; This file is NOT part of GNU Emacs.
 ;;
@@ -35,11 +35,8 @@
 
 (defun remarkable-load-cache ()
   "Load the cached state."
-  (let ((config (remarkable--load-cache remarkable--cache-file-name)))
-    (unless (remarkable--check-cache config)
-      (error "Cache seems corrupted"))
-    (remarkable--apply-cache config)
-    t))
+  (remarkable--load-cache remarkable--cache-file-name)
+  t)
 
 
 (defun remarkable-save-cache ()
@@ -51,41 +48,27 @@ The old state is backed-up first."
   t)
 
 
-(defun remarkable-clear-cache ()
-  "Clear all cached data.
-
-This will force a full re-synchronisation at the next call to
-`remarkable-sync'.
-"
-  (if (remarkable-cache-exists?)
-      (f-delete remarkable--cache-file-name))
-  (setq remarkable--root-hierarchy nil)
-  t)
-
-
 ;; ---------- Cache file handling ----------
 
 (defun remarkable--save-cache (fn)
-  "Save the document cache to FN.
+  "Save the connection to FN.
 
-This persists important state information as a plist:
+This persists important connection state information as a plist:
 
-   - device UUID
-   - device token
-   - user token
-   - user token expiry time
-   - root index hash
-   - document generation
-   - entry hierarchy"
-  (with-temp-file fn
-    (print `(:device-uuid ,remarkable--device-uuid
-	     :device-token ,remarkable--device-token
-	     :user-token ,remarkable--user-token
-	     :user-token-expires ,remarkable--user-token-expires
-	     :hash ,remarkable--hash
-	     :generation ,remarkable--generation
-	     :hierarchy ,remarkable--root-hierarchy)
-	   (current-buffer))))
+   - the connection type and details
+   - the cache of the tablet's contents
+   - the associations between org headings and tablet UUIDs
+
+This information is all obtained from the current tablet
+connection in `remarkable-tablet'.
+"
+  (let ((connection `(:connection-type ,(type-of remarkable-tablet))))
+    (with-temp-file fn
+      (print connection (current-buffer))
+      (remarkable-save remarkable-tablet)
+      (print remarkable-org--documents (current-buffer)))
+
+    (message "Connection saved to %s" fn)))
 
 
 (defun remarkable--backup-cache (fn)
@@ -98,42 +81,32 @@ The backup gets the extension \".bak\"."
 
 
 (defun remarkable--load-cache (fn)
-  "Load the document cache from FN.
+  "Load the connection from FN.
 
-We evaluate the data structure as quoted to avoid executing rogue
-code that might be introduced the cache file.
+A new connection of the samme type is created and populated with
+the file cache and connection details saved. The associations
+between org headings and document UUID are reloaded."
+  (with-temp-buffer
+    (insert-file-contents fn)
+    (goto-char 0)
 
-Returns the cache plist."
-  (let* ((raw-config (with-temp-buffer
-		       (insert-file-contents fn)
-		       (buffer-string))))
-    (car (read-from-string raw-config))))
+    ;; read the details
+    (let* ((connection (read (current-buffer)))
+	   (type (plist-get connection :connection-type))
+	   (conn (make-instance type)))
 
+      ;; load the connection authentication details and cache
+      (remarkable-load conn)
 
-(defun remarkable--check-cache (config)
-  "Check the the cache CONFIG contains all the expected elements."
-  (-all? (lambda (tag) (plist-get config tag))
-		 '(:device-uuid :device-token
-		   :user-token :user-token-expires
-		   :hash :generation :hierarchy)))
+      ;; read the org associations
+      (let ((associations (read (current-buffer))))
+	;; install the connection
+	(setq remarkable-tablet conn)
 
+	;; install the associations
+	(setq remarkable-org--documents associations)
 
-(defun remarkable--apply-cache (config)
-  "Apply CONFIG to the global state."
-  (if-let ((uuid (plist-get config :device-uuid)))
-      (setq remarkable--device-uuid uuid))
-  (if-let ((dt (plist-get config :device-token)))
-      (setq remarkable--device-token dt))
-  (if-let ((ut (plist-get config :user-token)))
-      (setq remarkable--user-token ut))
-  (if-let ((ute (plist-get config :user-token-expires)))
-      (setq remarkable--user-token-expires ute))
-  (if-let ((hash (plist-get config :hash)))
-      (setq remarkable--hash hash))
-  (if-let ((gen (plist-get config :generation)))
-      (setq remarkable--generation gen))
-  (if-let ((hier (plist-get config :hierarchy)))
-      (setq remarkable--root-hierarchy hier)))
+	(message "Connection loaded from %s" fn)))))
 
 
 (provide 'remarkable-cache)

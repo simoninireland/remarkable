@@ -31,6 +31,10 @@
 
 ;;; Code:
 
+;; for development only
+(add-to-list 'load-path (expand-file-name "~/programming/remarkable"))
+
+
 ;; Customisation options
 (require 'remarkable-custom)
 
@@ -41,8 +45,9 @@
 ;; Cache file handling
 (require 'remarkable-cache)
 
-;; Entries
-(require 'remarkable-entries)
+;; Basic functionality and APIs
+(require 'remarkable-entry)
+(require 'remarkable-connection)
 
 ;; File structures
 (require 'remarkable-files)
@@ -55,15 +60,20 @@
 ;;(require 'remarkable-cloud-sync15)
 
 ;; ssh (USB and local network) API
-(require remarkable-ssh)
+(require 'remarkable-ssh)
 
 ;; Format conversion
+;; TBD
 
 ;; dired-style buffer-based interaction
 (require 'remarkable-mode)
 
 ;; org integration
-;;(require 'remarkable-org)
+(require 'remarkable-org)
+
+
+(setq remarkable--connection-type 'usb)
+(remarkable-mode)
 
 
 (provide 'remarkable)

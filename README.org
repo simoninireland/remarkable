@@ -9,4 +9,4 @@
 
 ** Author
 
-   Copyright (c) 2023, [[simoninireland@gmail.com][Simon Dobson]].
+   Copyright (c) 2023--2024, [[simoninireland@gmail.com][Simon Dobson]].

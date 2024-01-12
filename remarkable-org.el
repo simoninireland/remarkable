@@ -236,6 +236,10 @@ This simply concatenates the UUID of E with the TYPE as extension."
 ;;    r:         download a document and attach it
 ;;    R or C-r:  upload an attachment
 
+;; TODO: These two commands should be added as a group later in the list,
+;; as it's presented in the dispatcher in order and we don't really want
+;; these commands right upfront. It does mean hacking the list a bit, though.
+
 (add-to-list 'org-attach-commands
 	     (list (list ?r) #'remarkable-org-attach
 		   "Download an attachment from the reMarkable tablet."))

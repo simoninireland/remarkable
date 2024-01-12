@@ -1,6 +1,6 @@
 ;;; remarkable-entry.el --- File/folder entries -*- lexical-binding: t -*-
 
-;; Copyright (c) 2023 Simon Dobson <simoninireland@gmail.com>
+;; Copyright (c) 2023--2024 Simon Dobson <simoninireland@gmail.com>
 
 ;; This file is NOT part of GNU Emacs.
 ;;

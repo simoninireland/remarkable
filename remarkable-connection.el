@@ -98,9 +98,13 @@ details.")
 (cl-defgeneric remarkable-index (conn)
   "Retrieve the index for the tablet CONN.
 
-If the index is already partially cached, update it without
-entirely rebuilding if possible. Returns a hierarchical list of
-entries for the collections and documents.")
+This may calkl `remarkable-sync' if there ius alrfeady index data
+cached, which should make loading faster. Returns a hierarchical
+list of entries for the collections and documents.")
+
+
+(cl-defgeneric remarkable-sync (conn)
+  "Synchronise the connection CONN  with the actual state of the tablet.")
 
 
 (cl-defgeneric remarkable-get (conn uuid content-fn &key format)
@@ -174,6 +178,158 @@ deleted.")
 
 \"Changed\" includes moving within the hierarchy, being
 annotated, being tagged, or any other change.")
+
+(defvar remarkable-before-document-upload-hook nil
+  "Hook called before a document is uploaded to the tablet.")
+
+(defvar remarkable-after-document-download-hook nil
+  "Hook called after a document is downloaded from the tablet.")
+
+
+;; ---------- Hierarchy synchronisation ----------
+
+(defun remarkable-connection--sync (hier index)
+  "Synchronise HIER with a newly-downloaded INDEX.
+
+Both HIER and INDEX consist of entries -- in the case of HIER,
+entries with hierarchy; in the case of INDEX, a flat list.
+Synchronising the two performs the following operations:
+
+1. Extract the entries in HIER that are not in INDEX
+   (the deleted entries), and remove them from HIER
+   This consists of two sub-steps:
+
+   1a. Remove the deleted documents
+   1b. Then remove the deleted collections, checking
+       that the collections are empty
+
+2. Extract the entries in INDEX that are not in HIER
+   (the new entries), retrieve their metadata, and add
+   them at the correct point in HIER. This consists of two
+   sub-steps:
+
+   2a. Add any new collections
+   2b. Add any new documents, whose parent collection must
+       exist
+
+3. Extract the entries in HIER that have different hashes
+   to the corresponding entries in INDEX, download their
+   metadata, and (if their parent has changed) move them
+   within HIER
+
+Each stage runs the aporopriate hook functions, allowing clients
+to respond to the changes.
+
+Return the new hierarchy."
+  (cl-flet ((remove-document (h e)
+	      (if (remarkable-entry-is-document? e)
+		  (progn
+		    (message "Document \"%s\" deleted" (remarkable-entry-name e))
+		    (run-hook-with-args 'remarkable--document-deleted-hook e)
+		    (remarkable--delete-entry e h))
+		h))
+
+	    (remove-collection (h e)
+	      (if (remarkable-entry-is-collection? e)
+		  (if (remarkable-entry-has-contents? e)
+		      (error "Trying to delete a non-empty collection %s"  (remarkable-entry-name e))
+		    (progn
+		      (message "Collection \"%s\" deleted" (remarkable-entry-name e))
+		      (run-hook-with-args 'remarkable--collection-deleted-hook e)
+		      (remarkable--delete-entry e h)))
+		h))
+
+	    (add-collection (h e)
+	      (if (remarkable-entry-is-collection? e)
+		  (progn
+		    (message "New collection \"%s\" added" (remarkable-entry-name e))
+		    (run-hook-with-args 'remarkable--collection-added-hook e)
+		    (remarkable--add-entry e h))
+		h))
+
+	    (add-document (h e)
+	      (if (not (remarkable-entry-parent-exists? e h))
+		  (error "Trying to add document to unknown collecton")
+		(progn
+		  (message "New document \"%s\" added" (remarkable-entry-name e))
+		  (run-hook-with-args 'remarkable--document-added-hook e)
+		  (remarkable--add-entry e h)))))
+
+    ;; 1. remove deleted entries
+    (let ((des (remarkable--find-deleted-entries hier index)))
+      ;; 1a. remove documents
+      (let ((hier1a (cl-reduce #'remove-document des
+			       :initial-value hier)))
+
+	;; 1b remove collections (if empty)
+	(let ((hier1b (cl-reduce #'remove-collection des
+				 :initial-value hier1a)))
+
+	  ;; 2. add new entries
+	  (let* ((nes (remarkable--find-new-entries-with-metadata hier1b index)))
+	    ;; 2a. add collections
+	    (let ((hier2a (cl-reduce #'add-collection nes
+				     :initial-value hier1b)))
+
+	      ;; 2a add new documents
+	      (let ((hier2b (cl-reduce #'add-document nes
+				       :initial-value hier2a)))
+
+		;; don't do 3 for now
+		hier2b))))))))
+
+
+(defun remarkable-connection--find-deleted-entries (hier index)
+  "Return the entries in HIER that are not in INDEX."
+  (cl-flet ((is-deleted (e)
+	      "Return E if it is deleted."
+	      (let ((uuid (remarkable-entry-uuid e)))
+		(if (null (remarkable--find-entry uuid index))
+		    e))))
+
+    (remarkable--mapcan-entries #'is-deleted hier)))
+
+
+(defun remarkable-connection--find-new-entries (hier index)
+  "Return the entries in INDEX that are not in HIER."
+  (cl-flet ((is-new (e)
+	      "Return E if it is new."
+	      (let ((uuid (remarkable-entry-uuid e)))
+		(if (null (remarkable--find-entry uuid hier))
+		    e))))
+
+    (remarkable--mapcan-entries #'is-new index)))
+
+
+(defun remarkable--find-new-entries-with-metadata (hier index)
+  "Return new entries with their metadata.
+
+This function simply applies `remarkable--add-metadata' to the
+results of `remarkable--find-new-entries'."
+  (remarkable--add-metadata (remarkable--find-new-entries hier index)))
+
+
+(defun remarkable-connection--find-changed-entries (hier index)
+  "Return the entries in INDEX that are in HIER with different hashes.
+
+The entry returned will have the UUID of an entry in HIER, with the
+hash and metadata from INDEX."
+  (cl-flet ((is-changed (e)
+	      "Return E if it is changed."
+	      (let* ((uuid (remarkable-entry-uuid e))
+		     (f (remarkable--find-entry uuid hier)))
+		(if (remarkable-entry-changed? e f)
+		    e))))
+
+    (remarkable--mapcan-entries #'is-changed index)))
+
+
+(defun remarkable-connection--find-changed-entries-with-metadata (hier index)
+  "Return changed entries with their metadata.
+
+This function simply applies `remarkable--add-metadata' to the
+results of `remarkable--find-changed-entries'."
+  (remarkable--add-metadata (remarkable--find-changed-entries hier index)))
 
 
 (provide 'remarkable-connection)

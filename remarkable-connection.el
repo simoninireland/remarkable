@@ -98,7 +98,7 @@ details.")
 (cl-defgeneric remarkable-index (conn)
   "Retrieve the index for the tablet CONN.
 
-This may calkl `remarkable-sync' if there ius alrfeady index data
+This may call `remarkable-sync' if there is already index data
 cached, which should make loading faster. Returns a hierarchical
 list of entries for the collections and documents.")
 

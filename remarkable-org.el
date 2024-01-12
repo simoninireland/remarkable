@@ -93,8 +93,7 @@ which it is attached."
 	  (remarkable-org--associate uuid id)
 
 	  ;; update the cache
-	  ;;(remarkable-save-cache)
-	  ))))
+	  (remarkable-save-cache)))))
 
 
 ;; ---------- Attaching documents ----------

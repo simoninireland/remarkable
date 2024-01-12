@@ -56,7 +56,7 @@
 ;; ---------- ssh connections ----------
 
 (defcustom remarkable-ssh--usb-ip-address "10.11.99.1"
-  "The IP address assigned to a reMarkab;e tablet plugged-in to the USB port."
+  "The IP address assigned to a reMarkab;e tablet plugged into the USB port."
   :group 'remarkable-group
   :type 'string)
 
@@ -66,20 +66,16 @@
   :type 'string)
 
 (defcustom remarkable-ssh--user "root"
-  "User on the reMarkable tablet."
-  :group 'remarkable-group
-  :type 'string)
-
-(defcustom remarkable-ssh--host "remarkable"
-  "Name of the reMarkable tablet as seen from the client.
-
-This will typically be an entry in the local DNS. It can also
-be an IP address to access the tablet over USB."
+  "ssh user on the reMarkable tablet."
   :group 'remarkable-group
   :type 'string)
 
 (defcustom remarkable-ssh--sync-command "systemctl restart xochitl"
-  "Command run on the reMarkable tablet to end a synchronisation."
+  "Command run on the reMarkable tablet to end a synchronisation.
+
+This runs as the ssh user, which is usuallt root: if for some
+reason the user is changed then this comnmand will need to change
+too, possibly to use sudo."
   :group 'remarkable-group
   :type 'string)
 

@@ -131,8 +131,10 @@ strip the extension and replace underscores with spaces.
 
 The metadata can be altered using PARENT and TITLE.
 
+The file creation is all client-side, to be uploaded later.
+
 Return the metadata and a list of sub-files consisting of the content
-sub-file, metadata sub0file, and any others created, in that order."
+sub-file, metadata sub-file, and any others created, in that order."
   ;; check the parent exists and is a collection
   (if (not (or (null parent)
 	       (equal parent "")))

@@ -92,32 +92,6 @@
   "Hash of the root index.")
 
 
-;; ---------- Hooks ----------
-
-;; Synchronisation hooks. Each is called with the entry of the appropriate
-;; document. The return value of the hook functions is ignored, meaning that
-;; (for example) there's no way to stop a document being deleted, since it's
-;; already happened in the cloud.
-
-(defvar remarkable--document-added-hook nil
-  "Hook called when a new document is found during synchronisation.")
-
-(defvar remarkable--collection-added-hook nil
-  "Hook called when a new collection is found during synchronisation.")
-
-(defvar remarkable--document-deleted-hook nil
-  "Hook called when a document is found to have been deleted during synchronisation.")
-
-(defvar remarkable--collection-deleted-hook nil
-  "Hook called when a collection is found to have been deleted during synchronisation.")
-
-(defvar remarkable--document-changed-hook nil
-  "Hook called when a document is found to have changed during synchronisation.
-
-\"Changed\" includes moving within the hierarchy, being
-annotated, being tagged, or any other change.")
-
-
 ;; ---------- Public API ----------
 
 (defun remarkable-init ()
@@ -258,15 +232,6 @@ Return a list consisting of the index and the hash."
 	   (hs (remarkable--entry-hashes hier))
 	   (hash (remarkable--sha256-sum hs)))
       (list index hash))))
-
-
-;; ---------- File type handling ----------
-
-(defun remarkable--file-types-supported ()
-  "Return a list of the file types we support.
-
-This should be extracted from `remarkable--file-types-plist'."
-  (list "pdf" "epub" "rm" "lines"))
 
 
 ;; ---------- Index handling ----------

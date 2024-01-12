@@ -184,5 +184,15 @@ the data."
 	  (f-delete tmp)))))
 
 
+;; ---------- File type handling ----------
+
+(defun remarkable--file-types-supported ()
+  "Return a list of the file types we support.
+
+This should be extracted from `remarkable--file-types-plist'
+custromisation variable."
+  (list "pdf" "epub" "rm" "lines"))
+
+
 (provide 'remarkable-utils)
 ;;; remarkable-utils.el ends here

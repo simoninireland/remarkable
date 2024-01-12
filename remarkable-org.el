@@ -1,13 +1,6 @@
 ;;; remarkable-org.el --- reMarkable/org link -*- lexical-binding: t -*-
 
-;; Copyrighqt (c) 2023 Simon Dobson <simoninireland@gmail.com>
-
-;; Author: Simon Dobson <simoninireland@gmail.com>
-;; Maintainer: Simon Dobson <simoninireland@gmail.com>
-;; Version: 0.1.1
-;; Keywords: hypermedia, multimedia
-;; Homepage: https://github.com/simoninireland/remarkable
-;; Package-Requires: ((emacs "27.2") (org "8.0") (org-roam)
+;; Copyright (c) 2023--2024 Simon Dobson <simoninireland@gmail.com>
 
 ;; This file is NOT part of GNU Emacs.
 ;;
@@ -34,52 +27,74 @@
 (require 'org)
 
 
-;; ---------- Constants ----------
+;; ---------- GLobal variables ----------
 
-(defconst remarkable-org--uuid-property "REMARKABLE-UUID"
-  "Property used to store the attachment name and UUID of a linked document.")
+(defvar remarkable-org--documents nil
+  "Mapping of documents synced with the reMarkable tablet.
+
+The mapping takes the form of an alist mapping a reMarkable-side
+UUID for an org id, allowing the org-side document heading to
+which the document is indirectly attached. The attached document
+may have originally come from the tablet (and been downloaded),
+or may have originally come from the org note (and been
+uploaded). Either way changes in the reMarkable-side document
+will, when detected, trigger an update on the org-side.")
 
 
 ;; ---------- Public API ----------
 
 (defun remarkable-org-attach ()
-  "Attach a document from the reMarkable cloud to the current node.
+  "Attach a document from the reMarkable tablet to the current node.
 
 This will query for a document and (if there's a choice)
 the desired content type, and then download this document and
 attach it."
   (interactive)
-  (remarkable-load-index)
-  (cl-destructuring-bind (e type)
-      (remarkable-org--choose-document-type remarkable--root-hierarchy)
-    (remarkable-org--attach-document e type)
-    (remarkable-org--set-uuid-property e type)
-    (message "Attached %s" (remarkable-entry-name e))
+  (let ((hier (remarkable-index remarkable-tablet)))
+    (cl-destructuring-bind (e type)
+	(remarkable-org--choose-document-type hier)
 
-    ;; update the cache
-    (remarkable-save-cache)))
+      ;; attach the document
+      (remarkable-org--attach-document e type)
+
+      ;; record the link between the heading and the document
+      (let ((uuid (remarkable-entry-uuid e))
+	    (id (org-entry-get (point) "ID" t)))
+	(remarkable-org--associate uuid id))
+
+      ;; update the cache
+      (remarkable-save-cache)
+      (message "Attached %s" (remarkable-entry-name e)))))
 
 
 (defun remarkable-org-read ()
-  "Upload an attachment from the current org node to the reMarkable cloud.
+  "Upload an attachment from the current org node to the reMarkable tablet.
 
 This will query for an attachment if there is more than one, and
 check the format is compatible with the tablet. The document's
 visible name on the tablet is set to the same as the heading to
 which it is attached."
   (interactive)
-  (remarkable-load-index)
+  ;;(remarkable-index remarkable-tablet)
   (if-let* ((afn (remarkable-org--choose-attachment))
 	    (attach-dir (org-attach-dir))
 	    (fn (f-join attach-dir afn))
-	    (heading (org-get-heading t t t t)))
+	    (heading (org-get-heading t t t t))
+	    (id (org-entry-get nil "ID")))
       (progn
+	;; clean the headline
 	(set-text-properties 0 (length heading) nil heading)
-	(remarkable--upload-document fn :title heading)
-	(message "Uploaded \"%s\" (%s)" heading afn)
 
-	;; update the cache
-	(remarkable-save-cache))))
+	;; upload the document and its sub-files
+	(let ((uuid (remarkable-put remarkable-tablet fn :title heading)))
+	  (message "Uploaded \"%s\" (%s)" heading afn)
+
+	  ;; record the association betwen UUID and headline id
+	  (remarkable-org--associate uuid id)
+
+	  ;; update the cache
+	  ;;(remarkable-save-cache)
+	  ))))
 
 
 ;; ---------- Attaching documents ----------
@@ -104,17 +119,17 @@ disambiguate them."
 This presents a `completing-read' buffer from which to choose a
 document.
 
-Return the entry."
+Return the entry of the chosen document."
   (if-let* ((chooser (remarkable-org--chooser hier))
 	    (choice (completing-read "Document: "
 				     chooser
 				     nil t))
 	    (uuid (cdr (assoc choice chooser))))
-    (remarkable--find-entry uuid hier)))
+      (remarkable--find-entry uuid hier)))
 
 
 (defun remarkable-org--choose-document-type (hier)
-  "Chppse a document from HIER, requesting a type if there is a choice.
+  "Choose a document from HIER, requesting a type if there is a choice.
 
 The types are extracted from `remarkable--file-types-supported'
 using `remarkable--get-content-types'. If there is only one,
@@ -181,8 +196,9 @@ i.e., the UUID of E with extension TYPE."
 	  (f-mkdir-full-path tmp)
 
 	  ;; download the document
-	  (if (remarkable--get-content e type content-fn)
-	      ;; attach to the current node
+	  (if (remarkable-get remarkable-connection uuid content-fn :format type)
+	      ;; attach to the current node using the 'cp' method to
+	      ;; take the document out of the temp directory
 	      (org-attach-attach content-fn nil 'cp)))
 
       ;; clean-up the temporary storage
@@ -193,21 +209,22 @@ i.e., the UUID of E with extension TYPE."
 (defun remarkable-org--attachment-file-name (e type)
   "Return the attachment filename to use for entry E with the given TYPE.
 
-This simply concatenates the UUID of E with the TYPE mas extension."
+This simply concatenates the UUID of E with the TYPE as extension."
   (let ((uuid (remarkable-entry-uuid e)))
     (f-swap-ext uuid type)))
 
 
-(defun remarkable-org--set-uuid-property (e type)
-  "Store the details of E with type TYPE as a property."
-  (let* ((uuid (remarkable-entry-uuid e))
-	 (attachment-fn (remarkable-org--attachment-file-name e type))
-	 (prop (org--property-local-values remarkable-org--uuid-property nil))
-	 (elem (format "%s/%s/%s" uuid type attachment-fn))
-	 (newprop (if prop
-		      (concat (car prop) ";" elem)
-		    elem)))
-    (org-set-property remarkable-org--uuid-property newprop)))
+;; ---------- Associations ----------
+
+(defun remarkable-org--associate (uuid id)
+  "Record the association between document UUID and heading ID."
+  (add-to-list 'remarkable-org--documents (cons uuid id)))
+
+
+(defun remarkable-org--find-id-for-uuid (uuid)
+  "Return the org element ID associated with document UUID."
+  (assoc uuid remarkable-org--documents))
+
 
 
 ;; ---------- Keymap ----------
@@ -228,7 +245,6 @@ This simply concatenates the UUID of E with the TYPE mas extension."
 	     (list (list ?R ?\C-r) #'remarkable-org-read
 		   "Upload an attachment to read on the reMarkable tablet."))
 
-(setq org-attach-commands (cdr org-attach-commands))
 
 (provide 'remarkable-org)
 ;; remarkable-org.el ends here

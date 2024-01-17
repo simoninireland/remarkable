@@ -483,12 +483,6 @@ rest."
 		      (concat (path-elements p) "/" n))))))
     (path-elements e)))
 
-(let* ((es (slot-value remarkable-tablet 'cache))
-       (e (remarkable-org--choose-document es)))
-  (remarkable-entry-path e es))
-
-(let* ((es (slot-value remarkable-tablet 'cache)))
-  (remarkable-org--chooser es))
 
 (provide 'remarkable-entry)
 ;;; remarkable-entry.el ends here

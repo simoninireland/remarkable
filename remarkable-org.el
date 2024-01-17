@@ -41,6 +41,15 @@ uploaded). Either way changes in the reMarkable-side document
 will, when detected, trigger an update on the org-side.")
 
 
+;; ---------- Hooks ----------
+
+(defvar remarkable-org-attachment-tags-hook nil
+  "Hook run to determine the tags added to a document being uplaodsed.
+
+Each hook function is called with a list of strings as tags, and
+the liost it rewturns is passed to the next hook function.")
+
+
 ;; ---------- Public API ----------
 
 (defun remarkable-org-attach ()
@@ -85,15 +94,17 @@ which it is attached."
 	;; clean the headline
 	(set-text-properties 0 (length heading) nil heading)
 
-	;; upload the document and its sub-files
-	(let ((uuid (remarkable-put remarkable-tablet fn :title heading)))
-	  (message "Uploaded \"%s\" (%s)" heading afn)
+	;; compute the tags to add to the document
+	(let ((tags (remarkable-org--run-attachment-tags-hook fn id)))
+	  ;; upload the document and its sub-files
+	  (let ((uuid (remarkable-put remarkable-tablet fn :title heading :tags tags)))
+	    (message "Uploaded \"%s\" (%s)" heading afn)
 
-	  ;; record the association betwen UUID and headline id
-	  (remarkable-org--associate uuid id)
+	    ;; record the association betwen UUID and headline id and attached file
+	    (remarkable-org--associate uuid id afn)
 
-	  ;; update the cache
-	  (remarkable-save-cache)))))
+	    ;; update the cache
+	    (remarkable-save-cache))))))
 
 
 ;; ---------- Attaching documents ----------
@@ -213,11 +224,25 @@ This simply concatenates the UUID of E with the TYPE as extension."
     (f-swap-ext uuid type)))
 
 
+;; ---------- Tags ----------
+
+(defun remarkable-org--run-attachment-tags-hook (fn id)
+  "Run the functions hung on `remarkable-org-attachment-tags-hook'.
+
+Each function on the hook is passed a list of strings
+representing tags to be applied to the document being uploaded,
+which is identified by its absolute filename FN and heading id
+ID. The list it returns is passed to the next hook function, with
+the result of the final function being the list that is used to
+tag the document."
+  (funcall-through remarkable-org-attachment-tags-hook '() fn id))
+
+
 ;; ---------- Associations ----------
 
-(defun remarkable-org--associate (uuid id)
-  "Record the association between document UUID and heading ID."
-  (add-to-list 'remarkable-org--documents (cons uuid id)))
+(defun remarkable-org--associate (uuid id fn)
+  "Record the association between document UUID and attachmewnt FN in heading ID."
+  (add-to-list 'remarkable-org--documents (cons uuid (cons id fn))))
 
 
 (defun remarkable-org--find-id-for-uuid (uuid)

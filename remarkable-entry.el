@@ -188,7 +188,7 @@ on the cache."
 
 
 (defun remarkable--find-entry-n (n es)
-  "Return entry E from the (possibly nested) entries in ES.
+  "Return entry N from the (possibly nested) entries in ES.
 
 This performs a traversal of the entry hierarchy, visiting an
 entry and then all its contents recursively. N starts from 1.
@@ -459,6 +459,36 @@ demand, and let us interact with the sub-files directly when
 necessary."
   (remarkable--get-index (remarkable-entry-hash e)))
 
+
+(defun remarkable-entry-path (e es &optional maxlen)
+  "Return the full path for entry E in ES.
+
+The path is composed of the entry's name and those of its
+parents, like a file path. This is only useful for display. If
+MAXLEN is provided, cap the length of names and elipsise the
+rest."
+  (cl-labels ((path-elements (e)
+		"Add path elements for E back up the hierarchy."
+		(let* ((m (remarkable-entry-name e))
+		       (n (if maxlen
+			      (concat (s-left maxlen m) "...")
+			    m)))
+		  (if (remarkable-entry-is-in-root-collection? e)
+		      ;; just return the name of the entry and end the recursion
+		      n
+
+		    ;; recurse and concatenate names
+		    (let* ((pid (remarkable-entry-parent e))
+			   (p (remarkable--find-entry pid es)))
+		      (concat (path-elements p) "/" n))))))
+    (path-elements e)))
+
+(let* ((es (slot-value remarkable-tablet 'cache))
+       (e (remarkable-org--choose-document es)))
+  (remarkable-entry-path e es))
+
+(let* ((es (slot-value remarkable-tablet 'cache)))
+  (remarkable-org--chooser es))
 
 (provide 'remarkable-entry)
 ;;; remarkable-entry.el ends here

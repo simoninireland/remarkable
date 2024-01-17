@@ -86,10 +86,19 @@ strip the extension and replace underscores with spaces.
 	  :metadatamodified :json-false)))
 
 
-(defun remarkable--create-content-plist (fn)
-  "Create the content description for a document FN."
-  (let ((length (f-length fn))
-	(ext (f-ext fn)))
+(defun remarkable--create-content-plist (fn tags)
+  "Create the content description for a document FN.
+
+If TAGS are provided they are added as tags."
+  (let* ((length (f-length fn))
+	 (ext (f-ext fn))
+	 (now (remarkable--lisp-timestamp (current-time)))
+	 (ts (if tags
+		 (apply #'vector (mapcar (lambda (tag)
+					   (list :name tag
+						 :timestamp now))
+					 tags))
+	       :json-null)))
     (list :dummyDocument :json-false
 	  :fileType ext
 	  :extraMetadata (list :LastBrushColor ""
@@ -115,6 +124,7 @@ strip the extension and replace underscores with spaces.
 	  :pages :json-null
 	  :redirectionPageMap :json-null
 	  :pageTags :json-null
+	  :tags ts
 	  :transform (list :m11 1
 			   :m12 0
 			   :m13 0
@@ -126,10 +136,10 @@ strip the extension and replace underscores with spaces.
 			   :m33 1))))
 
 
-(cl-defun remarkable--create-subfiles (fn uuid dir &key parent title)
+(cl-defun remarkable--create-subfiles (fn uuid dir &key parent title tags)
   "Create the sub-files for file FN in DIR with the given UUID.
 
-The metadata can be altered using PARENT and TITLE.
+The metadata can be altered using PARENT, TITLE, and TAGS.
 
 The file creation is all client-side, to be uploaded later.
 
@@ -152,7 +162,7 @@ sub-file, metadata sub-file, and any others created, in that order."
 	 (metadata-fn (f-swap-ext (f-join dir uuid) remarkable--metadata-ext))
 	 (metacontent-fn (f-swap-ext (f-join dir uuid) remarkable--content-ext))
 	 (metadata (remarkable--create-metadata-plist fn parent))
-	 (metacontent (remarkable--create-content-plist fn)))
+	 (metacontent (remarkable--create-content-plist fn tags)))
 
     ;; set title if supplied
     (if title

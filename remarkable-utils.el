@@ -194,5 +194,33 @@ custromisation variable."
   (list "pdf" "epub" "rm" "lines"))
 
 
+;; ---------- Extra higher-order functions ----------
+
+(defun funcall-through (fs v &rest args)
+  "Thread V through a list of functions FS.
+
+V is passed to the first function in FS along with any extra
+ARGS, with the result being passed to the next function (along
+with the same extra ARGS), and so on. The final result is the
+result of the last function in FS. If FS is empty the result is V
+itself. FS may also be a singleton rather than a list, in which
+case this function behaves like `funcall'."
+  (if (listp fs)
+      (let ((p v))
+	(dolist (f fs)
+	  (setf p (apply f (cons p args))))
+	p)
+
+    ;; not a list, just call the function
+    (apply fs (cons  v args))))
+
+
+;; ---------- Set functions ----------
+
+(defun set-union (&rest ss)
+  "Form the set union of the lists in SS."
+  (-uniq (apply #'append ss)))
+
+
 (provide 'remarkable-utils)
 ;;; remarkable-utils.el ends here

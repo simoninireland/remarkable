@@ -72,7 +72,10 @@ ssh can be invoked without needing passwords.")
 (cl-defmethod remarkable-put ((conn remarkable-ssh-connection) fn &key title collection tags)
   (with-slots (cache) conn
     (cl-destructuring-bind (uuid newhier)
-	(remarkable-ssh--upload-document conn fn cache :parent collection :title title)
+	(remarkable-ssh--upload-document conn fn cache
+					 :parent collection
+					 :title title
+					 :tags tags)
       (setf cache newhier)
       (message "Uploaded document %s" fn)
       uuid)))
@@ -197,12 +200,12 @@ metadata file, as identified by
 
 ;; ---------- Uploading API ----------
 
-(cl-defun remarkable-ssh--upload-document (conn fn hier &key parent title)
+(cl-defun remarkable-ssh--upload-document (conn fn hier &key parent title tags)
   "Upload document FN to given PARENT on CONN, adding the resulting entry to HIER.
 
-If PARENT is omitted the document goes to the root collection.
-If TITLE is supplied it is used as the visible name for the
-document."
+If PARENT is omitted the document goes to the root collection. If
+TITLE is supplied it is used as the visible name for the
+document. If TAGS are suppleid they are added as tags."
   (let* ((uuid (remarkable--uuid))
 	 (tmp (remarkable--create-temporary-directory-name uuid)))
     (unwind-protect
@@ -214,7 +217,8 @@ document."
 	  (cl-destructuring-bind (metadata fns)
 	      (remarkable--create-subfiles fn uuid tmp
 					   :parent parent
-					   :title title)
+					   :title title
+					   :tags tags)
 
 	    ;; create the empty marker directory
 	    (remarkable-ssh--create-directory conn uuid)

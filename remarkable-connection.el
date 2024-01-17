@@ -81,6 +81,7 @@ with type of connection determined by the value of the
 
 
 (cl-defmethod remarkable-init (conn)
+  "By default there is no connection CONN initialisation to do."
   (message "No initialisation to do"))
 
 

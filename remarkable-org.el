@@ -116,11 +116,18 @@ Only documents are presented, not collections.
 
 We assume for now that titles are unique: otherwise we need to
 disambiguate them."
-  (remarkable--mapcan-entries (lambda (e)
-				(if (remarkable-entry-is-document? e)
-				    (cons (remarkable-entry-name e)
-					  (remarkable-entry-uuid e))))
-			      hier))
+  (cl-flet ((add-choice (e)
+	      "Add E as a choice if it is an un-deleted document."
+	      (if (and (remarkable-entry-is-document? e)
+		       (not (remarkable-entry-is-deleted? e)))
+		  (cons (remarkable-entry-path e hier)
+			(remarkable-entry-uuid e))))
+
+	    (sort-choices (s1 s2)
+	      "Sort two choices by their path."
+	      (string< (car s1) (car s2))))
+
+    (-sort #'sort-choices (remarkable--mapcan-entries #'add-choice hier))))
 
 
 (defun remarkable-org--choose-document (hier)
